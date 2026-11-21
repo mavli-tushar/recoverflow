@@ -1,5 +1,18 @@
 document.addEventListener("DOMContentLoaded", function () {
 
+    document.querySelectorAll(".wc-pvr-manual-send button[data-confirm]").forEach(function (button) {
+        button.form.addEventListener("submit", function (event) {
+            if (!window.confirm(button.getAttribute("data-confirm"))) {
+                event.preventDefault();
+                return;
+            }
+            const confirmationInput = button.form.querySelector('input[name="confirmed"]');
+            if (confirmationInput) { confirmationInput.value = "1"; }
+            button.disabled = true;
+            button.textContent = "Sending...";
+        });
+    });
+
     if (typeof wc_pvr_data === "undefined") {
         return;
     }
@@ -8,9 +21,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     let countdownEl = document.getElementById("wc-pvr-countdown");
 
-    if (!countdownEl) {
-        return;
-    }
+    if (!countdownEl) { return; }
 
     function updateCountdown() {
 

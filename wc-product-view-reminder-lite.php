@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce Product View Reminder Lite
 Description: Sends reminder email when a customer views a WooCommerce product but does not purchase it.
-Version: 1.0
+Version: 2.0
 Author: Tushar Malvi
 Requires Plugins: woocommerce
 Text Domain: wc-product-view-reminder-lite
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 |--------------------------------------------------------------------------
 */
 
-define( 'WC_PVR_VERSION', '1.0' );
+define( 'WC_PVR_VERSION', '2.0' );
 define( 'WC_PVR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WC_PVR_URL', plugin_dir_url( __FILE__ ) );
 
@@ -99,10 +99,20 @@ function wc_pvr_init() {
     require_once WC_PVR_PATH . 'includes/class-admin-settings.php';
     require_once WC_PVR_PATH . 'includes/class-tracker.php';
     require_once WC_PVR_PATH . 'includes/class-reminder.php';
+    require_once WC_PVR_PATH . 'includes/class-consent.php';
+    require_once WC_PVR_PATH . 'includes/class-order-store.php';
+    require_once WC_PVR_PATH . 'includes/class-privacy.php';
+
+    $consent = new WC_PVR_Consent();
+    $GLOBALS['wc_pvr_consent'] = $consent;
+    $order_store = new WC_PVR_Order_Store();
+    $GLOBALS['wc_pvr_order_store'] = $order_store;
+    new WC_PVR_Privacy();
 
     new WC_PVR_Admin_Settings();
     new WC_PVR_Tracker();
-    new WC_PVR_Reminder();
+    $reminder = new WC_PVR_Reminder();
+    $GLOBALS['wc_pvr_reminder'] = $reminder;
 }
 
 add_action( 'plugins_loaded', 'wc_pvr_init', 20 );
@@ -148,6 +158,7 @@ function wc_pvr_create_table() {
         added_to_cart TINYINT(1) DEFAULT 0,
         purchased TINYINT(1) DEFAULT 0,
         view_time DATETIME NOT NULL,
+        cart_added_at DATETIME DEFAULT NULL,
 
         view_reminder_sent TINYINT(1) DEFAULT 0,
         cart_reminder_sent TINYINT(1) DEFAULT 0,
@@ -157,10 +168,38 @@ function wc_pvr_create_table() {
 
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-    dbDelta( $sql );
+    $table_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_name ) ) === $table_name;
+    if ( ! $table_exists ) {
+        dbDelta( $sql );
+    }
+
+    $cart_time_column = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$table_name} LIKE %s", 'cart_added_at' ) );
+    if ( ! $cart_time_column ) {
+        $wpdb->query( "ALTER TABLE {$table_name} ADD COLUMN cart_added_at DATETIME DEFAULT NULL AFTER view_time" );
+    }
+
+    // Add indexes with explicit DDL; dbDelta's index parser varies across WP versions.
+    $indexes = array(
+        'view_time' => 'KEY view_time (view_time)',
+        'user_id' => 'KEY user_id (user_id)',
+        'customer_email' => 'KEY customer_email (email(100))',
+    );
+    foreach ( $indexes as $index_name => $definition ) {
+        $exists = $wpdb->get_var( $wpdb->prepare( "SHOW INDEX FROM {$table_name} WHERE Key_name = %s", $index_name ) );
+        if ( ! $exists ) {
+            $wpdb->query( "ALTER TABLE {$table_name} ADD {$definition}" );
+        }
+    }
 }
 
 register_activation_hook( __FILE__, 'wc_pvr_create_table' );
+
+function wc_pvr_activate_account_endpoint() {
+    require_once WC_PVR_PATH . 'includes/class-consent.php';
+    add_rewrite_endpoint( 'wc-pvr-email-preferences', EP_ROOT | EP_PAGES );
+    flush_rewrite_rules();
+}
+register_activation_hook( __FILE__, 'wc_pvr_activate_account_endpoint' );
 
 
 /*
@@ -247,6 +286,8 @@ function wc_pvr_clear_cron() {
     if ( $timestamp ) {
         wp_unschedule_event( $timestamp, 'wc_pvr_cron' );
     }
+
+    wp_clear_scheduled_hook( 'wc_pvr_retention_cleanup' );
 
 }
 

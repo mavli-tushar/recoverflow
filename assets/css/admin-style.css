@@ -2,6 +2,42 @@
 max-width:1000px;
 }
 
+.wc-pvr-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 16px;
+    margin: 22px 0;
+}
+
+.wc-pvr-stat-card {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 18px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+}
+
+.wc-pvr-stat-card h2 {
+    color: #50575e;
+    font-size: 13px;
+    font-weight: 500;
+    margin: 0 0 12px;
+}
+
+.wc-pvr-stat-card p {
+    color: #1d2327;
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0;
+}
+
+.wc-pvr-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+    margin-top: 16px;
+}
+
 .wc-pvr-title{
 font-size:26px;
 font-weight:600;
@@ -93,4 +129,84 @@ color:#fff;
 
 #wc-pvr-cart-message-row {
     display: none;
+}
+
+.wc-pvr-admin .wc-pvr-filters,
+.wc-pvr-admin form[method="get"] {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+    margin: 16px 0;
+}
+
+.wc-pvr-admin .wc-pvr-manual-send { margin: 0; }
+.wc-pvr-admin table td { vertical-align: middle; }
+.wc-pvr-admin .wc-pvr-stat-card { border-top: 3px solid #2271b1; }
+.wc-pvr-admin .wc-pvr-card { min-width: 0; }
+.wc-pvr-admin .wc-pvr-email-preview {
+    max-width: 680px;
+    padding: 24px;
+    border: 1px solid #dcdcde;
+    background: #fff;
+    color: #1d2327;
+}
+.wc-pvr-admin .wc-pvr-bars,
+.wc-pvr-admin .wc-pvr-ranking { margin: 0; padding: 0; list-style: none; }
+.wc-pvr-admin .wc-pvr-bars li,
+.wc-pvr-admin .wc-pvr-ranking li {
+    display: grid;
+    grid-template-columns: minmax(90px, 140px) minmax(80px, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f1;
+}
+.wc-pvr-admin .wc-pvr-ranking li { grid-template-columns: 1fr auto; }
+.wc-pvr-admin .wc-pvr-bar-track { display: block; height: 12px; background: #f0f0f1; border-radius: 6px; overflow: hidden; }
+.wc-pvr-admin .wc-pvr-bar { display: block; height: 100%; background: #2271b1; border-radius: 6px; }
+.wc-pvr-admin .wc-pvr-status {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+.wc-pvr-admin .wc-pvr-status-opted_in { color: #14532d; background: #dcfce7; }
+.wc-pvr-admin .wc-pvr-status-opted_out { color: #7f1d1d; background: #fee2e2; }
+.wc-pvr-admin .wc-pvr-empty {
+    padding: 18px 22px;
+    margin: 18px 0;
+    border: 1px solid #dcdcde;
+    border-left: 4px solid #72aee6;
+    background: #fff;
+}
+.wc-pvr-admin .wc-pvr-card ul { margin-left: 20px; list-style: disc; }
+.wc-pvr-admin .wc-pvr-card li { margin-bottom: 7px; }
+.wc-pvr-admin .form-table th { width: 250px; }
+.wc-pvr-admin .form-table input[type="number"] { max-width: 120px; }
+
+@media screen and (max-width: 782px) {
+    .wc-pvr-admin { margin-right: 10px; }
+    .wc-pvr-admin .wc-pvr-bars li { grid-template-columns: minmax(76px, 96px) 1fr auto; gap: 8px; }
+    .wc-pvr-admin .wc-pvr-card { padding: 16px; }
+    .wc-pvr-admin .wc-pvr-filters label { width: 100%; }
+    .wc-pvr-admin .form-table th { width: auto; }
+}
+
+.wc-pvr-help .wc-pvr-help-intro { max-width: 900px; font-size: 15px; }
+.wc-pvr-help .wc-pvr-help-nav { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 20px 0; padding: 14px 18px; border: 1px solid #dcdcde; background: #fff; }
+.wc-pvr-help .wc-pvr-help-nav a { font-weight: 600; }
+.wc-pvr-help .wc-pvr-help-nav a:focus-visible { outline: 2px solid #2271b1; outline-offset: 3px; }
+.wc-pvr-help .wc-pvr-help-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-width: 1320px; }
+.wc-pvr-help .wc-pvr-help-card { scroll-margin-top: 40px; padding: 20px 22px; }
+.wc-pvr-help .wc-pvr-help-card h2 { margin-top: 0; font-size: 17px; }
+.wc-pvr-help .wc-pvr-help-card p:last-child,
+.wc-pvr-help .wc-pvr-help-card ul:last-child,
+.wc-pvr-help .wc-pvr-help-card ol:last-child { margin-bottom: 0; }
+.wc-pvr-help .wc-pvr-help-card li { line-height: 1.6; }
+
+@media screen and (max-width: 900px) {
+    .wc-pvr-help .wc-pvr-help-grid { grid-template-columns: minmax(0, 1fr); }
 }
