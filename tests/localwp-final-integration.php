@@ -100,6 +100,27 @@ try {
 	}
 	ob_start(); $admin->consent_page(); $consent_rows_html = ob_get_clean();
 	$assert( false !== strpos( $consent_rows_html, 'phase3_local_test' ) && false !== strpos( $consent_rows_html, 'Opted in' ) && false !== strpos( $consent_rows_html, 'email' ), 'Consent Management renders synthetic source, channel, and status details' );
+	ob_start(); $admin->dashboard_page(); $dashboard_html = ob_get_clean();
+	$assert( false !== strpos( $dashboard_html, 'Product views' ) && false !== strpos( $dashboard_html, 'Reminder activity' ) && false !== strpos( $dashboard_html, 'Queue and setup health' ), 'redesigned Dashboard renders KPIs, activity charts, and queue status' );
+	ob_start(); $admin->analytics_page(); $analytics_html = ob_get_clean();
+	$assert( false !== strpos( $analytics_html, 'Top viewed products' ) && false !== strpos( $analytics_html, 'Top reminded products' ) && false !== strpos( $analytics_html, 'wc-pvr-analytics-trend' ), 'redesigned Analytics renders product rankings and outcome trends' );
+	ob_start(); $admin->history_page(); $history_html = ob_get_clean();
+	$assert( false !== strpos( $history_html, 'Reminder History' ) && false !== strpos( $history_html, 'date_from' ), 'redesigned Reminder History renders date and status filters' );
+	$get_before_reminder_render = $_GET;
+	$_GET['view_status'] = 'pending';
+	ob_start(); $admin->reminders_page(); $reminders_html = ob_get_clean();
+	$_GET = $get_before_reminder_render;
+	$assert( false !== strpos( $reminders_html, 'wc-pvr-reminders-table' ) && false !== strpos( $reminders_html, 'View details' ) && false !== strpos( $reminders_html, 'Apply filters' ), 'redesigned Customer Reminders renders filters, status badges, and details actions' );
+	$assert( 1 === substr_count( $reminders_html, $emails[0] ), 'Customer Reminders displays each synthetic customer email exactly once in its row' );
+	if ( get_option( 'wc_pvr_orders_backfill_complete', 0 ) ) { $assert( false !== strpos( $reminders_html, 'Send Reminder' ), 'eligible synthetic reminder has a manual send action' ); }
+	$get_before_malformed_filters = $_GET;
+	$_GET = array( 'days' => array( '90' ), 'date_from' => array( '2026-01-01' ), 'date_to' => array( '2026-12-31' ), 'status' => array( 'failed' ), 'trigger' => array( 'manual' ), 's' => array( 'not-a-scalar' ), 'paged' => array( '3' ) );
+	ob_start(); $admin->reminders_page(); $safe_reminders_html = ob_get_clean();
+	ob_start(); $admin->history_page(); $safe_history_html = ob_get_clean();
+	ob_start(); $admin->analytics_page(); $safe_analytics_html = ob_get_clean();
+	ob_start(); $admin->consent_page(); $safe_consent_html = ob_get_clean();
+	$_GET = $get_before_malformed_filters;
+	$assert( false !== strpos( $safe_reminders_html, 'Customer Reminders' ) && false !== strpos( $safe_history_html, 'Reminder History' ) && false !== strpos( $safe_analytics_html, 'RecoverFlow Analytics' ) && false !== strpos( $safe_consent_html, 'Consent Management' ), 'admin filters safely ignore array-valued query input' );
 
 	$manual_email = $emails[0];
 	$manual_item = $items[0];
@@ -112,6 +133,8 @@ try {
 		$assert( is_wp_error( $duplicate_result ) && 'already_sent' === $duplicate_result->get_error_code(), 'duplicate manual send is blocked' );
 		$manual_history = absint( $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . WC_PVR_Consent::history_table_name() . ' WHERE email_hash = %s AND result = %s', WC_PVR_Consent::email_hash( $manual_email ), 'accepted' ) ) );
 		$assert( 1 === $manual_history, 'Reminder History records one accepted manual send' );
+		ob_start(); $admin->history_page(); $history_after_send = ob_get_clean();
+		$assert( false !== strpos( $history_after_send, 'wp_mail accepted' ) && false !== strpos( $history_after_send, 'Manual' ) && false !== strpos( $history_after_send, 'Inspect' ), 'Reminder History labels the accepted synthetic send and exposes attempt details' );
 
 		$cron_email = $emails[1];
 		$cron_item = $items[1];

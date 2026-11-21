@@ -1,10 +1,10 @@
-﻿# RecoverFlow Development Audit
+# RecoverFlow Development Audit
 
 Last updated: 2026-11-21
 
 ## Implemented state
 
-RecoverFlow remains on its existing tracker, reminder service, settings class, custom view table, and WooCommerce CRUD order index. Plugin version is 2.0; consent/storage schema version is 1.4.
+RecoverFlow remains on its existing tracker, reminder service, settings class, custom view table, and WooCommerce CRUD order index. Plugin version is 2.1; consent/storage schema version is 1.4. This UI refinement adds no database migration.
 
 - Product tracking remains limited to logged-in customers. Frontend tracking delay and reminder waiting period are separate. The reminder wait defaults to 24 hours.
 - Cart rows now have a nullable `cart_added_at` value. The waiting period starts from cart addition; older rows without the value use their legacy `view_time`.
@@ -13,6 +13,9 @@ RecoverFlow remains on its existing tracker, reminder service, settings class, c
 - Consent Management lists the latest choice per keyed email identity, status, source, channel, update time, masked customer reference, and an explanation. It reports adapter registration without claiming that a registered adapter allows any particular customer. Administrators can record a verified opt-out only; there is no silent opt-in action.
 - System Status reports software versions, HPOS state, schema/ledger and purchase-index state, pending age-qualified rows, recent failures, mail configuration, retention cleanup, and cron scheduling separately from the last completed RecoverFlow callback.
 - Added a Help page under RecoverFlow with direct links and plain-language setup, feature, consent, email, privacy, and troubleshooting guidance for store administrators.
+- Version 2.1 refines the admin experience without changing reminder eligibility, consent, purchase suppression, or mail behavior. Dashboard charts, KPIs, queue status, and recent attempts are easier to scan; reminders have compact customer/product cells, status badges, search and record filters, pagination, and expandable action explanations; History and Analytics display badge-based outcomes and daily trends; integration diagnostics are collapsed until requested.
+- Fixed duplicate email text in the Customer Reminders row when the WordPress display name equals the email address. Admin query filters now reject array-shaped values safely. HTML time metadata uses the WordPress site timezone.
+- Admin CSS selectors are scoped to RecoverFlow screens, with visible keyboard focus, responsive cards/forms, and horizontally scrollable wide tables to avoid page-level overflow on narrow screens.
 - WordPress privacy exporter and eraser are registered. Erasure removes RecoverFlow view/history/purchase-index data and leaves WooCommerce orders untouched. By default, one keyed opt-out suppression hash is retained; administrators can disable it in Privacy and retention settings.
 - View, history, and consent-history retention are configurable. Defaults are 0 (retain until manual erasure). History retention accepts either 0 or at least seven days, preserving the weekly frequency cap. Cleanup runs daily, deletes at most 250 selected IDs per data set per invocation, keeps the latest consent status, and clears expired token fields in bounded batches.
 - Added a privacy-policy guide section explaining RecoverFlow data and erasure behavior.
@@ -35,6 +38,7 @@ The `customer_email` index uses a 100-character prefix, within older MySQL/Maria
 - LocalWP PHP and its site `php.ini` were used for integration tests. The ini prints a missing optional `php_imagick.dll` startup warning; it did not prevent WordPress bootstrap, database access, WooCommerce CRUD, or mail capture.
 - Mailpit was reachable on the LocalWP API at `127.0.0.1:10018`. Two unique `.test` messages from the latest synthetic integration run were found in Mailpit: one manual send and one cron send. No non-synthetic recipient was enabled by the test eligibility filter.
 - `tests/localwp-final-integration.php` passed: additive migration/index/backfill assertions, Consent Management, System Status, and Help page server-side rendering, privacy exporter/eraser registration, temporary synthetic users/products/unpaid WooCommerce orders/consent/views, one accepted manual send, duplicate block, one due automatic cron send, accepted history, cron completion time, privacy export including purchase lookup references, erasure with opt-out suppression, proof the WooCommerce order remained unchanged, and daily cleanup schedule. Post-cleanup assertions verified its synthetic WordPress users, orders, products, views, consent, history, and purchase references were removed.
+- The version 2.1 LocalWP integration run additionally rendered the redesigned Dashboard, Analytics, Reminder History, and Customer Reminders pages against synthetic rows. It verified reminder filters, safe handling of array-valued query input, a single display of the synthetic customer's email, and the eligible manual-send action; after send it verified manual/accepted badges and expandable attempt details. The run's manual and automatic synthetic emails were accepted by `wp_mail()` and the test cleaned up both synthetic customers, products, orders, and RecoverFlow records.
 - The LocalWP test is CLI/server-side integration, not browser interaction. The local order backfill option was not changed by the test. WP-Cron test eligibility was restricted to its unique `.test` address.
 - Earlier LocalWP service runs verified `wp_mail()` false handling, purchase suppression for logged-in and guest billing-email matches, variation matching, manual retry/duplicate handling, and order CRUD indexing. Those prior cases were not repeated in the final integration script.
 - The tests did not execute retention deletion against the LocalWP store's existing rows. The standalone privacy smoke test checks registration, invalid-identity handling, scheduling, and the 250-ID batch bound using a synthetic database double.
@@ -87,4 +91,4 @@ Manual LocalWP steps using synthetic identities only:
 4. Test concurrent manual/cron requests on a supported MySQL/MariaDB environment and review advisory-lock behavior on multi-server hosts.
 5. Review suppression-hash retention and configured retention periods with the store's privacy/legal requirements.
 
-No production deployment, commit, or push was performed.
+Version 2.1 adds no schema migration and has not been deployed to production. LocalWP Mailpit contained both expected synthetic `.test` messages from the latest integration run. Browser click-through and responsive screenshots remain unverified.

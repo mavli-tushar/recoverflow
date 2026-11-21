@@ -2,7 +2,7 @@
 /*
 Plugin Name: WooCommerce Product View Reminder Lite
 Description: Sends reminder email when a customer views a WooCommerce product but does not purchase it.
-Version: 2.0
+Version: 2.1
 Author: Tushar Malvi
 Requires Plugins: woocommerce
 Text Domain: wc-product-view-reminder-lite
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 |--------------------------------------------------------------------------
 */
 
-define( 'WC_PVR_VERSION', '2.0' );
+define( 'WC_PVR_VERSION', '2.1' );
 define( 'WC_PVR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WC_PVR_URL', plugin_dir_url( __FILE__ ) );
 

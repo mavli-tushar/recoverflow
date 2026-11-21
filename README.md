@@ -2,6 +2,8 @@
 
 RecoverFlow is the WooCommerce Product View Reminder Lite plugin. It tracks product views for logged-in customers and can send product or optional cart reminders when a customer is eligible. It does not identify anonymous visitors, and a product view is never consent.
 
+Current plugin release: **2.1**.
+
 ## Installation and setup
 
 1. Activate WooCommerce and RecoverFlow.
@@ -14,14 +16,14 @@ The **Tracking delay** controls how long a logged-in customer must remain on a p
 
 ## RecoverFlow admin pages
 
-- **Dashboard** shows stored views and age-qualified reminder rows.
-- **Customer Reminders** provides search, current consent and eligibility explanations, scheduled dates, purchase status, and confirmed manual sends. Manual sends skip only the waiting period. Consent, opt-outs, product validity, current purchase state, duplicate and retry checks, and frequency limits still apply.
-- **Reminder History** shows manual and automatic attempts, results, failures, retries, and blocked actions. “wp_mail accepted” means WordPress accepted the message for sending; it does not confirm inbox delivery.
-- **Analytics** reports stored views and attempt records for the selected date range. The eligibility count is a bounded scan. RecoverFlow does not invent revenue or conversion estimates.
+- **Dashboard** shows 30-day activity cards, daily product-view and reminder-outcome charts, queue setup health, recent attempts, and links to common tasks. Due candidates still require customer-level consent and purchase checks.
+- **Customer Reminders** provides email or customer-ID search, record-type filters, paginated views, customer initials, product images, consent and eligibility badges, scheduled dates, purchase status, and a details panel explaining blocks. A customer email appears once in each row. Manual sends skip only the waiting period. Consent, opt-outs, product validity, current purchase state, duplicate and retry checks, and frequency limits still apply.
+- **Reminder History** shows manual and automatic attempts, result and trigger badges, failures, retry counts, and expandable attempt details. “wp_mail accepted” means WordPress accepted the message for sending; it does not confirm inbox delivery.
+- **Analytics** reports stored views and reminder attempts for the selected 7, 30, or 90-day range, with daily outcome trends and top viewed/reminded products. Eligibility is a bounded scan. RecoverFlow does not invent revenue or conversion estimates.
 - **Email Templates** supports subject, heading, sender, product-view and cart bodies, CTA text, escaped placeholders, synthetic previews, and local-only test mail to a `.test` address.
-- **Consent Management** summarizes the latest ledger status, source, channel, timestamp, and adapter registration. It never offers an administrator opt-in action. A verified-revocation action records opt-outs only.
+- **Consent Management** summarizes the latest ledger status, source, channel, timestamp, and adapter registration. Integration diagnostics are expandable. It never offers an administrator opt-in action. A verified-revocation action records opt-outs only.
 - **System Status** distinguishes a scheduled cron event from a completed RecoverFlow callback and reports storage, purchase-index, HPOS, failure, and mail configuration diagnostics.
-- **Settings** contains reminder, consent collection, and privacy retention controls.
+- **Settings** contains reminder, consent collection, and privacy retention controls. Tracking delay (seconds) determines when a product view is recorded; reminder waiting period (hours) determines when the message becomes time-eligible.
 - **Help** gives administrators a step-by-step guide to every page, reminder timing, consent, manual sends, email results, privacy, and troubleshooting.
 
 ## Consent and eligibility

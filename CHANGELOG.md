@@ -1,4 +1,15 @@
-﻿# Changelog
+# Changelog
+
+## 2.1 - Released 2026-11-21 (Admin UI/UX refinement)
+
+- Redesigned the RecoverFlow Dashboard with compact 30-day KPIs, daily views and reminder outcome charts, queue readiness, recent activity, and direct navigation to key tasks.
+- Improved Customer Reminders with responsive table scrolling, email/customer-ID search, record filters, customer initials, product thumbnails, concise status badges, expandable eligibility explanations, and disabled send actions with blocking reasons.
+- Fixed repeated customer email display when a WordPress display name is the same as its email address.
+- Improved Reminder History badges and expandable attempt details, and replaced the Analytics activity table with accessible daily outcome charts including unknown outcomes.
+- Clarified consent adapter diagnostics, settings timing labels, and headers/descriptions across plugin admin pages. Scoped the plugin's admin styles and added keyboard focus and mobile layouts.
+- Hardened admin filter inputs against array-valued query parameters and fixed site-timezone metadata on date/time elements.
+- Added LocalWP assertions for Dashboard, Analytics, History, Reminder list filters, and single-email rendering.
+- Verification: PHP syntax checks, JavaScript syntax check, four dependency-free smoke tests, and the LocalWP synthetic integration test. Mailpit captured both unique synthetic `.test` messages from manual and cron sends. Admin page rendering and send/cron flows were tested on the server; browser click-through and viewport screenshots remain manual checks.
 
 ## 2.0 - Released 2026-11-21
 

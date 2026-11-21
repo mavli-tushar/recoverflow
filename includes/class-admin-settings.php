@@ -119,43 +119,207 @@ class WC_PVR_Admin_Settings {
         return $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table;
     }
 
+    private function render_page_header( $title, $description, $actions = array() ) {
+        echo '<header class="wc-pvr-page-header"><div><h1>' . esc_html( $title ) . '</h1><p>' . esc_html( $description ) . '</p></div>';
+        if ( $actions ) {
+            echo '<div class="wc-pvr-page-actions">';
+            foreach ( $actions as $action ) {
+                $class = isset( $action['class'] ) ? $action['class'] : 'button button-secondary';
+                echo '<a class="' . esc_attr( $class ) . '" href="' . esc_url( admin_url( 'admin.php?page=' . $action['page'] ) ) . '">' . esc_html( $action['label'] ) . '</a>';
+            }
+            echo '</div>';
+        }
+        echo '</header>';
+    }
+
+    private function status_badge( $label, $tone = 'neutral', $tooltip = '' ) {
+        $allowed_tones = array( 'success', 'warning', 'danger', 'info', 'neutral' );
+        if ( ! in_array( $tone, $allowed_tones, true ) ) { $tone = 'neutral'; }
+        $title = '' !== $tooltip ? ' title="' . esc_attr( $tooltip ) . '"' : '';
+        return '<span class="wc-pvr-badge wc-pvr-badge--' . esc_attr( $tone ) . '"' . $title . '>' . esc_html( $label ) . '</span>';
+    }
+
+    private function display_datetime( $value ) {
+        if ( ! is_scalar( $value ) || '' === (string) $value ) { return __( 'Not available', 'wc-product-view-reminder-lite' ); }
+        try {
+            $date = new DateTimeImmutable( (string) $value, wp_timezone() );
+            return wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $date->getTimestamp() );
+        } catch ( Exception $exception ) {
+            return (string) $value;
+        }
+    }
+
+    private function machine_datetime( $value ) {
+        if ( ! is_scalar( $value ) || '' === (string) $value ) { return ''; }
+        try {
+            return ( new DateTimeImmutable( (string) $value, wp_timezone() ) )->format( DateTimeInterface::ATOM );
+        } catch ( Exception $exception ) {
+            return '';
+        }
+    }
+
+    private function customer_initials( $name, $email ) {
+        $name = trim( (string) $name );
+        if ( '' === $name && is_email( $email ) ) { $name = strtok( $email, '@' ); }
+        $parts = preg_split( '/\s+/', $name, -1, PREG_SPLIT_NO_EMPTY );
+        $initials = '';
+        if ( $parts ) {
+            $first_initial = function_exists( 'mb_substr' ) ? mb_substr( $parts[0], 0, 1, 'UTF-8' ) : ( preg_match( '/^./u', $parts[0], $matches ) ? $matches[0] : substr( $parts[0], 0, 1 ) );
+            $initials = function_exists( 'mb_strtoupper' ) ? mb_strtoupper( $first_initial, 'UTF-8' ) : strtoupper( $first_initial );
+            if ( count( $parts ) > 1 ) {
+                $last_part = end( $parts );
+                $last_initial = function_exists( 'mb_substr' ) ? mb_substr( $last_part, 0, 1, 'UTF-8' ) : ( preg_match( '/^./u', $last_part, $matches ) ? $matches[0] : substr( $last_part, 0, 1 ) );
+                $initials .= function_exists( 'mb_strtoupper' ) ? mb_strtoupper( $last_initial, 'UTF-8' ) : strtoupper( $last_initial );
+            }
+        }
+        return '' !== $initials ? $initials : 'C';
+    }
+
+    private function reminder_block_label( $error ) {
+        if ( ! is_wp_error( $error ) ) { return __( 'Ready', 'wc-product-view-reminder-lite' ); }
+        $labels = array(
+            'already_sent' => __( 'Already sent', 'wc-product-view-reminder-lite' ),
+            'already_purchased' => __( 'Purchased', 'wc-product-view-reminder-lite' ),
+            'purchase_suppressed' => __( 'Purchase found', 'wc-product-view-reminder-lite' ),
+            'customer_opted_out' => __( 'Opted out', 'wc-product-view-reminder-lite' ),
+            'consent_required' => __( 'Consent needed', 'wc-product-view-reminder-lite' ),
+            'invalid_product' => __( 'Product unavailable', 'wc-product-view-reminder-lite' ),
+            'invalid_email' => __( 'Email unavailable', 'wc-product-view-reminder-lite' ),
+            'waiting_period' => __( 'Waiting period', 'wc-product-view-reminder-lite' ),
+            'customer_frequency_limit' => __( 'Frequency limit', 'wc-product-view-reminder-lite' ),
+            'customer_rate_limit' => __( 'Rate limit', 'wc-product-view-reminder-lite' ),
+            'frequency_limit' => __( 'Frequency limit', 'wc-product-view-reminder-lite' ),
+            'retry_backoff' => __( 'Retry scheduled', 'wc-product-view-reminder-lite' ),
+            'retry_limit_reached' => __( 'Retry limit reached', 'wc-product-view-reminder-lite' ),
+            'send_outcome_unknown' => __( 'Review pending attempt', 'wc-product-view-reminder-lite' ),
+            'purchase_index_building' => __( 'Purchase lookup building', 'wc-product-view-reminder-lite' ),
+            'purchase_check_unavailable' => __( 'Purchase check unavailable', 'wc-product-view-reminder-lite' ),
+            'cart_reminder_disabled' => __( 'Cart reminders disabled', 'wc-product-view-reminder-lite' ),
+        );
+        $code = $error->get_error_code();
+        return isset( $labels[ $code ] ) ? $labels[ $code ] : __( 'Unavailable', 'wc-product-view-reminder-lite' );
+    }
+
     public function dashboard_page() {
         if ( ! current_user_can( 'manage_options' ) ) { return; }
         global $wpdb;
         $table = $wpdb->prefix . 'wc_pvr_views';
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'RecoverFlow Dashboard', 'wc-product-view-reminder-lite' ) . '</h1>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header(
+            __( 'RecoverFlow Dashboard', 'wc-product-view-reminder-lite' ),
+            __( 'A clear view of recent product interest, reminder activity, and setup health.', 'wc-product-view-reminder-lite' ),
+            array(
+                array( 'page' => 'wc-pvr-reminders', 'label' => __( 'Customer Reminders', 'wc-product-view-reminder-lite' ), 'class' => 'button button-primary' ),
+                array( 'page' => 'wc-pvr-analytics', 'label' => __( 'Analytics', 'wc-product-view-reminder-lite' ) ),
+                array( 'page' => 'wc-pvr-templates', 'label' => __( 'Email Templates', 'wc-product-view-reminder-lite' ) ),
+            )
+        );
         if ( ! $this->views_table_exists() ) {
-            echo '<div class="notice notice-warning"><p>' . esc_html__( 'Tracking storage is not available. Activate RecoverFlow to create its view table.', 'wc-product-view-reminder-lite' ) . '</p></div></div>';
+            echo '<div class="wc-pvr-empty"><h2>' . esc_html__( 'Tracking storage is not ready', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Complete RecoverFlow storage setup in Settings before reviewing activity.', 'wc-product-view-reminder-lite' ) . '</p><a class="button button-primary" href="' . esc_url( admin_url( 'admin.php?page=wc-pvr' ) ) . '">' . esc_html__( 'Open Settings', 'wc-product-view-reminder-lite' ) . '</a></div></div>';
             return;
         }
-        $stats = $wpdb->get_row( "SELECT COUNT(*) AS total_views, COUNT(DISTINCT CASE WHEN user_id > 0 THEN user_id END) AS identified_customers, SUM(view_reminder_sent = 1 OR cart_reminder_sent = 1) AS sent, SUM(purchased = 1) AS purchased FROM {$table}" );
+        $range_start = current_datetime()->modify( '-29 days' )->setTime( 0, 0, 0 );
+        $range_end = current_datetime()->modify( '+1 day' )->setTime( 0, 0, 0 );
+        $range_from = $range_start->format( 'Y-m-d H:i:s' );
+        $range_to = $range_end->format( 'Y-m-d H:i:s' );
+        $history_table = WC_PVR_Consent::history_table_name();
+        $history_ready = $this->history_table_exists();
+        $stats = $wpdb->get_row( $wpdb->prepare( "SELECT COUNT(*) AS total_views, COUNT(DISTINCT CASE WHEN user_id > 0 THEN user_id END) AS identified_customers, SUM(purchased = 1) AS purchased FROM {$table} WHERE view_time >= %s AND view_time < %s", $range_from, $range_to ) );
         $delay = max( 0, absint( get_option( 'wc_pvr_reminder_delay', 24 ) ) );
-        $cutoff = wp_date( 'Y-m-d H:i:s', time() - ( $delay * HOUR_IN_SECONDS ) );
+        $cutoff = current_datetime()->modify( '-' . $delay . ' hours' )->format( 'Y-m-d H:i:s' );
         $cart_enabled = absint( get_option( 'wc_pvr_cart_reminder', 0 ) );
-        $pending = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE purchased = 0 AND ((added_to_cart = 0 AND view_reminder_sent = 0 AND view_time <= %s) OR (added_to_cart = 1 AND cart_reminder_sent = 0 AND %d = 1 AND COALESCE(cart_added_at,view_time) <= %s))", $cutoff, $cart_enabled, $cutoff ) );
+        $pending = absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE purchased = 0 AND ((added_to_cart = 0 AND view_reminder_sent = 0 AND view_time <= %s) OR (added_to_cart = 1 AND cart_reminder_sent = 0 AND %d = 1 AND COALESCE(cart_added_at,view_time) <= %s))", $cutoff, $cart_enabled, $cutoff ) ) );
+        $accepted = $history_ready ? absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$history_table} WHERE result = 'accepted' AND attempted_at >= %s AND attempted_at < %s", $range_from, $range_to ) ) ) : 0;
+        $failed = $history_ready ? absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$history_table} WHERE result = 'failed' AND attempted_at >= %s AND attempted_at < %s", $range_from, $range_to ) ) ) : 0;
         $cards = array(
-            __( 'Product views', 'wc-product-view-reminder-lite' ) => absint( $stats->total_views ),
-            __( 'Identified customers', 'wc-product-view-reminder-lite' ) => absint( $stats->identified_customers ),
-            __( 'Age-qualified queue rows', 'wc-product-view-reminder-lite' ) => $pending,
-            __( 'wp_mail accepted', 'wc-product-view-reminder-lite' ) => absint( $stats->sent ),
-            __( 'Marked purchased', 'wc-product-view-reminder-lite' ) => absint( $stats->purchased ),
+            array( 'label' => __( 'Product views · 30 days', 'wc-product-view-reminder-lite' ), 'value' => absint( $stats->total_views ), 'tone' => 'blue' ),
+            array( 'label' => __( 'Identified customers', 'wc-product-view-reminder-lite' ), 'value' => absint( $stats->identified_customers ), 'tone' => 'violet' ),
+            array( 'label' => __( 'Due candidates', 'wc-product-view-reminder-lite' ), 'value' => $pending, 'tone' => 'amber' ),
+            array( 'label' => __( 'Mail accepted · 30 days', 'wc-product-view-reminder-lite' ), 'value' => $accepted, 'tone' => 'green' ),
+            array( 'label' => __( 'Failed attempts · 30 days', 'wc-product-view-reminder-lite' ), 'value' => $failed, 'tone' => 'red' ),
         );
         echo '<div class="wc-pvr-dashboard-grid">';
-        foreach ( $cards as $label => $value ) {
-            echo '<section class="wc-pvr-stat-card"><h2>' . esc_html( $label ) . '</h2><p>' . esc_html( number_format_i18n( $value ) ) . '</p></section>';
+        foreach ( $cards as $card ) {
+            echo '<section class="wc-pvr-stat-card wc-pvr-stat-card--' . esc_attr( $card['tone'] ) . '"><h2>' . esc_html( $card['label'] ) . '</h2><p>' . esc_html( number_format_i18n( $card['value'] ) ) . '</p></section>';
         }
-        echo '</div><p class="description">' . esc_html__( 'A wp_mail accepted result means WordPress accepted the message, not that it reached an inbox. Consent is checked per customer. See Analytics and Reminder History for recorded results. Revenue and conversion are not inferred.', 'wc-product-view-reminder-lite' ) . '</p>';
-        echo '</div>';
+
+        echo '</div><p class="wc-pvr-note">' . esc_html__( 'Due candidates have passed the waiting period; consent and purchase checks still determine whether a message may be sent. Mail acceptance is not confirmed inbox delivery.', 'wc-product-view-reminder-lite' ) . '</p>';
+
+        $chart_start = current_datetime()->setTime( 0, 0, 0 )->modify( '-13 days' );
+        $chart_end = current_datetime()->modify( '+1 day' )->setTime( 0, 0, 0 );
+        $chart_from = $chart_start->format( 'Y-m-d H:i:s' );
+        $chart_to = $chart_end->format( 'Y-m-d H:i:s' );
+        $daily_views = $wpdb->get_results( $wpdb->prepare( "SELECT DATE(view_time) AS day,COUNT(*) AS total FROM {$table} WHERE view_time >= %s AND view_time < %s GROUP BY DATE(view_time) ORDER BY day ASC", $chart_from, $chart_to ) );
+        $daily_view_map = array();
+        foreach ( (array) $daily_views as $daily ) { $daily_view_map[ $daily->day ] = absint( $daily->total ); }
+        $daily_attempt_map = array();
+        if ( $history_ready ) {
+            $daily_attempts = $wpdb->get_results( $wpdb->prepare( "SELECT DATE(attempted_at) AS day,SUM(result = 'accepted') AS accepted,SUM(result = 'failed') AS failed,SUM(result = 'blocked') AS blocked FROM {$history_table} WHERE attempted_at >= %s AND attempted_at < %s GROUP BY DATE(attempted_at) ORDER BY day ASC", $chart_from, $chart_to ) );
+            foreach ( (array) $daily_attempts as $daily ) { $daily_attempt_map[ $daily->day ] = array( 'accepted' => absint( $daily->accepted ), 'failed' => absint( $daily->failed ), 'blocked' => absint( $daily->blocked ) ); }
+        }
+        $chart_days = array();
+        $view_max = 1;
+        $attempt_max = 1;
+        for ( $index = 0; $index < 14; $index++ ) {
+            $day = $chart_start->modify( '+' . $index . ' days' )->format( 'Y-m-d' );
+            $attempt = isset( $daily_attempt_map[ $day ] ) ? $daily_attempt_map[ $day ] : array( 'accepted' => 0, 'failed' => 0, 'blocked' => 0 );
+            $chart_days[] = array( 'day' => $day, 'views' => isset( $daily_view_map[ $day ] ) ? $daily_view_map[ $day ] : 0, 'attempts' => $attempt );
+            $view_max = max( $view_max, $chart_days[ $index ]['views'] );
+            $attempt_max = max( $attempt_max, array_sum( $attempt ) );
+        }
+        echo '<div class="wc-pvr-dashboard-grid wc-pvr-dashboard-grid--charts"><section class="wc-pvr-card"><div class="wc-pvr-card-heading"><div><h2>' . esc_html__( 'Product views', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Daily tracked views · last 14 days', 'wc-product-view-reminder-lite' ) . '</p></div></div><ul class="wc-pvr-trend-list" aria-label="' . esc_attr__( 'Product views per day for the last 14 days', 'wc-product-view-reminder-lite' ) . '">';
+        foreach ( $chart_days as $point ) {
+            $width = $point['views'] ? max( 2, (int) round( 100 * $point['views'] / $view_max ) ) : 0;
+            $day_label = wp_date( 'D, M j', ( new DateTimeImmutable( $point['day'] . ' 12:00:00', wp_timezone() ) )->getTimestamp() );
+            echo '<li><span class="wc-pvr-trend-date">' . esc_html( $day_label ) . '</span><span class="wc-pvr-trend-track"><span class="wc-pvr-trend-fill wc-pvr-trend-fill--views" style="width:' . esc_attr( $width ) . '%"></span></span><strong>' . esc_html( number_format_i18n( $point['views'] ) ) . '</strong></li>';
+        }
+        echo '</ul></section><section class="wc-pvr-card"><div class="wc-pvr-card-heading"><div><h2>' . esc_html__( 'Reminder activity', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Recorded attempts by outcome · last 14 days', 'wc-product-view-reminder-lite' ) . '</p></div></div><div class="wc-pvr-chart-legend"><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--accepted"></i>' . esc_html__( 'Accepted', 'wc-product-view-reminder-lite' ) . '</span><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--failed"></i>' . esc_html__( 'Failed', 'wc-product-view-reminder-lite' ) . '</span><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--blocked"></i>' . esc_html__( 'Blocked', 'wc-product-view-reminder-lite' ) . '</span></div><ul class="wc-pvr-trend-list" aria-label="' . esc_attr__( 'Reminder attempts by outcome per day for the last 14 days', 'wc-product-view-reminder-lite' ) . '">';
+        foreach ( $chart_days as $point ) {
+            $total_attempts = array_sum( $point['attempts'] );
+            $accepted_width = $point['attempts']['accepted'] ? max( 1, (int) round( 100 * $point['attempts']['accepted'] / $attempt_max ) ) : 0;
+            $failed_width = $point['attempts']['failed'] ? max( 1, (int) round( 100 * $point['attempts']['failed'] / $attempt_max ) ) : 0;
+            $blocked_width = $point['attempts']['blocked'] ? max( 1, (int) round( 100 * $point['attempts']['blocked'] / $attempt_max ) ) : 0;
+            $day_label = wp_date( 'D, M j', ( new DateTimeImmutable( $point['day'] . ' 12:00:00', wp_timezone() ) )->getTimestamp() );
+            echo '<li><span class="wc-pvr-trend-date">' . esc_html( $day_label ) . '</span><span class="wc-pvr-trend-track wc-pvr-trend-track--stacked"><span class="wc-pvr-trend-fill wc-pvr-trend-fill--accepted" style="width:' . esc_attr( $accepted_width ) . '%"></span><span class="wc-pvr-trend-fill wc-pvr-trend-fill--failed" style="width:' . esc_attr( $failed_width ) . '%"></span><span class="wc-pvr-trend-fill wc-pvr-trend-fill--blocked" style="width:' . esc_attr( $blocked_width ) . '%"></span></span><strong>' . esc_html( number_format_i18n( $total_attempts ) ) . '</strong></li>';
+        }
+        echo '</ul></section></div>';
+
+        $lookup_ready = (bool) get_option( 'wc_pvr_orders_backfill_complete', 0 );
+        $ledger_ready = WC_PVR_Consent::is_installed();
+        $next_cron = wp_next_scheduled( 'wc_pvr_cron' );
+        $last_cron = get_option( 'wc_pvr_last_cron_completed_at', '' );
+        echo '<section class="wc-pvr-card wc-pvr-queue-health"><div class="wc-pvr-card-heading"><div><h2>' . esc_html__( 'Queue and setup health', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'A quick check of the systems that must be ready before a reminder can be sent.', 'wc-product-view-reminder-lite' ) . '</p></div><a class="button button-secondary" href="' . esc_url( admin_url( 'admin.php?page=wc-pvr-status' ) ) . '">' . esc_html__( 'View System Status', 'wc-product-view-reminder-lite' ) . '</a></div><div class="wc-pvr-health-grid"><div><span>' . esc_html__( 'Consent storage', 'wc-product-view-reminder-lite' ) . '</span>' . $this->status_badge( $ledger_ready ? __( 'Available · default deny', 'wc-product-view-reminder-lite' ) : __( 'Setup required', 'wc-product-view-reminder-lite' ), $ledger_ready ? 'success' : 'warning' ) . '</div><div><span>' . esc_html__( 'Purchase lookup', 'wc-product-view-reminder-lite' ) . '</span>' . $this->status_badge( $lookup_ready ? __( 'Complete', 'wc-product-view-reminder-lite' ) : __( 'Building or not started', 'wc-product-view-reminder-lite' ), $lookup_ready ? 'success' : 'warning' ) . '</div><div><span>' . esc_html__( 'Reminder check', 'wc-product-view-reminder-lite' ) . '</span>' . $this->status_badge( $next_cron ? __( 'Scheduled', 'wc-product-view-reminder-lite' ) : __( 'Not scheduled', 'wc-product-view-reminder-lite' ), $next_cron ? 'info' : 'warning', $next_cron ? $this->display_datetime( wp_date( 'Y-m-d H:i:s', $next_cron ) ) : '' ) . '</div><div><span>' . esc_html__( 'Last completed run', 'wc-product-view-reminder-lite' ) . '</span><strong>' . esc_html( $last_cron ? $this->display_datetime( $last_cron ) : __( 'None recorded', 'wc-product-view-reminder-lite' ) ) . '</strong></div></div><p class="wc-pvr-note">' . esc_html__( 'A scheduled event is not proof that the callback has run. “Due candidates” are counted before per-customer consent and purchase checks.', 'wc-product-view-reminder-lite' ) . '</p></section>';
+
+        echo '<section class="wc-pvr-card"><div class="wc-pvr-card-heading"><div><h2>' . esc_html__( 'Recent reminder activity', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Latest recorded attempts; accepted means wp_mail accepted the message, not confirmed delivery.', 'wc-product-view-reminder-lite' ) . '</p></div><a class="button button-secondary" href="' . esc_url( admin_url( 'admin.php?page=wc-pvr-history' ) ) . '">' . esc_html__( 'Open Reminder History', 'wc-product-view-reminder-lite' ) . '</a></div>';
+        $recent = $history_ready ? $wpdb->get_results( "SELECT id,attempted_at,product_id,reminder_type,trigger_type,result,failure_code,retry_count FROM {$history_table} ORDER BY attempted_at DESC,id DESC LIMIT 6" ) : array();
+        if ( empty( $recent ) ) {
+            echo '<div class="wc-pvr-empty wc-pvr-empty--compact"><p>' . esc_html__( 'No reminder attempts have been recorded yet.', 'wc-product-view-reminder-lite' ) . '</p></div>';
+        } else {
+            echo '<div class="wc-pvr-recent-list">';
+            foreach ( $recent as $attempt ) {
+                $product = wc_get_product( absint( $attempt->product_id ) );
+                $result_text = 'accepted' === $attempt->result ? __( 'Accepted by mail transport', 'wc-product-view-reminder-lite' ) : ( 'failed' === $attempt->result ? __( 'Failed', 'wc-product-view-reminder-lite' ) : ( 'blocked' === $attempt->result ? __( 'Blocked', 'wc-product-view-reminder-lite' ) : __( 'Pending review', 'wc-product-view-reminder-lite' ) ) );
+                $tone = 'accepted' === $attempt->result ? 'success' : ( 'failed' === $attempt->result ? 'danger' : ( 'blocked' === $attempt->result ? 'warning' : 'info' ) );
+                echo '<article class="wc-pvr-recent-item"><div class="wc-pvr-recent-product">' . ( $product ? wp_kses_post( $product->get_image( array( 40, 40 ) ) ) : '<span class="wc-pvr-product-placeholder" aria-hidden="true">—</span>' ) . '<div><strong>' . esc_html( $product ? $product->get_name() : sprintf( __( 'Deleted product #%d', 'wc-product-view-reminder-lite' ), absint( $attempt->product_id ) ) ) . '</strong><span>' . esc_html( ucfirst( $attempt->reminder_type ) . ' · ' . ucfirst( $attempt->trigger_type ) ) . '</span></div></div><div class="wc-pvr-recent-meta">' . $this->status_badge( $result_text, $tone ) . '<time datetime="' . esc_attr( $this->machine_datetime( $attempt->attempted_at ) ) . '">' . esc_html( $this->display_datetime( $attempt->attempted_at ) ) . '</time>';
+                if ( $attempt->failure_code || 'pending' === $attempt->result ) {
+                    echo '<details><summary>' . esc_html__( 'Details', 'wc-product-view-reminder-lite' ) . '</summary><p>' . esc_html( 'pending' === $attempt->result ? __( 'No final mail outcome was recorded. Review the history before trying again.', 'wc-product-view-reminder-lite' ) : $this->failure_reason_label( $attempt->failure_code ) ) . '</p></details>';
+                }
+                echo '</div></article>';
+            }
+            echo '</div>';
+        }
+        echo '</section></div>';
     }
 
     public function reminders_page() {
         if ( ! current_user_can( 'manage_options' ) ) { return; }
         global $wpdb;
         $table = $wpdb->prefix . 'wc_pvr_views';
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'Customer Reminders', 'wc-product-view-reminder-lite' ) . '</h1>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header( __( 'Customer Reminders', 'wc-product-view-reminder-lite' ), __( 'Review tracked products, current consent, purchase suppression, and reminder timing before sending.', 'wc-product-view-reminder-lite' ), array( array( 'page' => 'wc-pvr-history', 'label' => __( 'Reminder History', 'wc-product-view-reminder-lite' ) ) ) );
         if ( ! $this->views_table_exists() ) { echo '<div class="notice notice-warning"><p>' . esc_html__( 'Tracking storage is not available.', 'wc-product-view-reminder-lite' ) . '</p></div></div>'; return; }
         if ( isset( $_GET['wc_pvr_send_result'] ) ) {
-            $send_result = sanitize_key( wp_unslash( $_GET['wc_pvr_send_result'] ) );
+            $send_result = isset( $_GET['wc_pvr_send_result'] ) && is_scalar( $_GET['wc_pvr_send_result'] ) ? sanitize_key( wp_unslash( $_GET['wc_pvr_send_result'] ) ) : '';
             $accepted = 'accepted' === $send_result;
             $unknown = 'unknown' === $send_result;
             $notice_class = $accepted ? 'notice-success' : ( $unknown ? 'notice-warning' : 'notice-error' );
@@ -163,20 +327,32 @@ class WC_PVR_Admin_Settings {
             echo '<div class="notice ' . esc_attr( $notice_class ) . ' is-dismissible"><p>' . esc_html( $notice_text ) . '</p></div>';
         }
         $per_page = 20;
-        $paged = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
-        $search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
-        $where = '';
+        $paged = isset( $_GET['paged'] ) && is_scalar( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1;
+        $search = isset( $_GET['s'] ) && is_scalar( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
+        $view_filter = isset( $_GET['view_status'] ) && is_scalar( $_GET['view_status'] ) ? sanitize_key( wp_unslash( $_GET['view_status'] ) ) : '';
+        if ( ! in_array( $view_filter, array( '', 'pending', 'sent', 'purchased', 'cart', 'product' ), true ) ) { $view_filter = ''; }
+        $where_parts = array();
         $args = array();
-        if ( '' !== $search ) { $where = ' WHERE email LIKE %s'; $args[] = '%' . $wpdb->esc_like( $search ) . '%'; }
-        $total = (int) ( $args ? $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table}{$where}", $args ) ) : $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" ) );
-        $offset = ( $paged - 1 ) * $per_page;
+        if ( '' !== $search ) { $where_parts[] = '(email LIKE %s OR CAST(user_id AS CHAR) = %s)'; $args[] = '%' . $wpdb->esc_like( $search ) . '%'; $args[] = $search; }
+        if ( 'pending' === $view_filter ) { $where_parts[] = 'purchased = 0 AND view_reminder_sent = 0 AND cart_reminder_sent = 0'; }
+        elseif ( 'sent' === $view_filter ) { $where_parts[] = '(view_reminder_sent = 1 OR cart_reminder_sent = 1)'; }
+        elseif ( 'purchased' === $view_filter ) { $where_parts[] = 'purchased = 1'; }
+        elseif ( 'cart' === $view_filter ) { $where_parts[] = 'added_to_cart = 1'; }
+        elseif ( 'product' === $view_filter ) { $where_parts[] = 'added_to_cart = 0'; }
+        $where = $where_parts ? ' WHERE ' . implode( ' AND ', $where_parts ) : '';
+        $total_sql = "SELECT COUNT(*) FROM {$table}{$where}";
+        $total = (int) ( $args ? $wpdb->get_var( $wpdb->prepare( $total_sql, $args ) ) : $wpdb->get_var( $total_sql ) );
         $query_args = $args;
         $query_args[] = $per_page;
-        $query_args[] = $offset;
-        $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table}{$where} ORDER BY id DESC LIMIT %d OFFSET %d", $query_args ) );
-        if ( empty( $rows ) ) { echo '<p>' . esc_html( $search ? __( 'No customers matched your search.', 'wc-product-view-reminder-lite' ) : __( 'No product views have been recorded yet.', 'wc-product-view-reminder-lite' ) ) . '</p></div>'; return; }
-        echo '<form method="get"><input type="hidden" name="page" value="wc-pvr-reminders"><label for="wc-pvr-customer-search">' . esc_html__( 'Search customer email', 'wc-product-view-reminder-lite' ) . '</label> <input id="wc-pvr-customer-search" type="search" name="s" value="' . esc_attr( $search ) . '"><button class="button">' . esc_html__( 'Search', 'wc-product-view-reminder-lite' ) . '</button></form>';
-        echo '<div class="wc-pvr-table-wrap"><table class="widefat striped"><thead><tr><th>' . esc_html__( 'Customer', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Product', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Last viewed', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Consent', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Eligibility', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Scheduled', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Reminder status', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Purchase', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Action', 'wc-product-view-reminder-lite' ) . '</th></tr></thead><tbody>';
+        $query_args[] = ( $paged - 1 ) * $per_page;
+        $rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table}{$where} ORDER BY view_time DESC,id DESC LIMIT %d OFFSET %d", $query_args ) );
+
+        echo '<form method="get" class="wc-pvr-filters"><input type="hidden" name="page" value="wc-pvr-reminders"><label for="wc-pvr-customer-search">' . esc_html__( 'Search email or customer ID', 'wc-product-view-reminder-lite' ) . ' <input id="wc-pvr-customer-search" type="search" name="s" value="' . esc_attr( $search ) . '"></label><label for="wc-pvr-reminder-filter">' . esc_html__( 'Record type or status', 'wc-product-view-reminder-lite' ) . ' <select id="wc-pvr-reminder-filter" name="view_status"><option value="">' . esc_html__( 'All records', 'wc-product-view-reminder-lite' ) . '</option>';
+        foreach ( array( 'pending' => __( 'Open records', 'wc-product-view-reminder-lite' ), 'sent' => __( 'Accepted by mail transport', 'wc-product-view-reminder-lite' ), 'purchased' => __( 'Purchased', 'wc-product-view-reminder-lite' ), 'cart' => __( 'Cart records', 'wc-product-view-reminder-lite' ), 'product' => __( 'Product view records', 'wc-product-view-reminder-lite' ) ) as $filter_value => $filter_label ) { echo '<option value="' . esc_attr( $filter_value ) . '" ' . selected( $view_filter, $filter_value, false ) . '>' . esc_html( $filter_label ) . '</option>'; }
+        echo '</select></label><button class="button button-primary">' . esc_html__( 'Apply filters', 'wc-product-view-reminder-lite' ) . '</button></form>';
+        if ( empty( $rows ) ) { echo '<div class="wc-pvr-empty"><h2>' . esc_html__( 'No reminder records found', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html( $search || $view_filter ? __( 'Try changing the search text or selected filter.', 'wc-product-view-reminder-lite' ) : __( 'Product views will appear here after a signed-in customer is tracked.', 'wc-product-view-reminder-lite' ) ) . '</p></div></div>'; return; }
+
+        echo '<div class="wc-pvr-table-wrap"><table class="widefat striped wc-pvr-reminders-table"><thead><tr><th>' . esc_html__( 'Customer', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Product', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Last viewed', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Consent', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Eligibility', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Scheduled', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Reminder status', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Purchase', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Actions', 'wc-product-view-reminder-lite' ) . '</th></tr></thead><tbody>';
         foreach ( $rows as $row ) {
             $product = wc_get_product( absint( $row->product_id ) );
             $user = $row->user_id ? get_userdata( absint( $row->user_id ) ) : false;
@@ -194,7 +370,7 @@ class WC_PVR_Admin_Settings {
                 $scheduled = $scheduled_at->format( 'Y-m-d H:i:s' );
                 $is_waiting = $scheduled_at > current_datetime();
             } catch ( Exception $exception ) {
-                $scheduled = __( 'Unavailable', 'wc-product-view-reminder-lite' );
+                $scheduled = '';
                 $is_waiting = false;
             }
             if ( $row->purchased ) { $status = __( 'Purchased', 'wc-product-view-reminder-lite' ); $eligibility_label = __( 'Suppressed', 'wc-product-view-reminder-lite' ); }
@@ -206,14 +382,28 @@ class WC_PVR_Admin_Settings {
             elseif ( $is_waiting ) { $status = __( 'Waiting period', 'wc-product-view-reminder-lite' ); $eligibility_label = __( 'Eligible; waiting', 'wc-product-view-reminder-lite' ); }
             else { $status = __( 'Pending', 'wc-product-view-reminder-lite' ); $eligibility_label = __( 'Eligible', 'wc-product-view-reminder-lite' ); }
             $customer = $user ? trim( $user->first_name . ' ' . $user->last_name ) : '';
-            if ( '' === $customer ) { $customer = $email; }
+            if ( '' === $customer && $user && 0 !== strcasecmp( trim( $user->display_name ), $email ) ) { $customer = $user->display_name; }
             $consent_label = 'opted_in' === $consent ? __( 'Opted in', 'wc-product-view-reminder-lite' ) : ( 'opted_out' === $consent || $opted_out ? __( 'Opted out', 'wc-product-view-reminder-lite' ) : ( $external_ok ? __( 'Integration eligible', 'wc-product-view-reminder-lite' ) : __( 'No consent', 'wc-product-view-reminder-lite' ) ) );
-            echo '<tr><td>' . esc_html( $customer ) . '<br><code>' . esc_html( $email ) . '</code></td><td>';
-            if ( $product ) { echo wp_kses_post( $product->get_image( array( 40, 40 ) ) ) . ' <a href="' . esc_url( get_edit_post_link( $product->get_id() ) ) . '">' . esc_html( $product->get_name() ) . '</a><br>' . wp_kses_post( wc_price( $product->get_price() ) ); }
-            else { echo esc_html__( 'Product unavailable', 'wc-product-view-reminder-lite' ); }
-            echo '</td><td>' . esc_html( $row->view_time ) . '</td><td>' . esc_html( $consent_label ) . '</td><td>' . esc_html( $eligibility_label ) . '</td><td>' . esc_html( $scheduled ) . '</td><td>' . esc_html( $status ) . '</td><td>' . ( $row->purchased ? esc_html__( 'Yes', 'wc-product-view-reminder-lite' ) : esc_html__( 'No', 'wc-product-view-reminder-lite' ) ) . '</td><td>';
             $service = isset( $GLOBALS['wc_pvr_reminder'] ) ? $GLOBALS['wc_pvr_reminder'] : null;
-            $manual_allowed = $service instanceof WC_PVR_Reminder ? $service->can_send( $row, true, false ) : new WP_Error( 'service_unavailable' );
+            $manual_allowed = $service instanceof WC_PVR_Reminder ? $service->can_send( $row, true, false ) : new WP_Error( 'service_unavailable', __( 'Reminder service is unavailable.', 'wc-product-view-reminder-lite' ) );
+            if ( is_wp_error( $manual_allowed ) && ! in_array( $manual_allowed->get_error_code(), array( 'already_sent', 'waiting_period' ), true ) && $eligible && $product && ! $row->purchased ) {
+                $eligibility_label = $this->reminder_block_label( $manual_allowed );
+                $status = $eligibility_label;
+            }
+            $purchase_blocked = is_wp_error( $manual_allowed ) && in_array( $manual_allowed->get_error_code(), array( 'purchase_suppressed', 'already_purchased' ), true );
+            $status_tone = ( $row->purchased || ! $product || ! is_email( $email ) || $opted_out || $purchase_blocked ) ? 'danger' : ( ( $row->view_reminder_sent || $row->cart_reminder_sent ) ? 'success' : ( $is_waiting || ! $eligible || is_wp_error( $manual_allowed ) ? 'warning' : 'info' ) );
+            $eligibility_tone = ( $row->purchased || ! $product || $opted_out || $purchase_blocked ) ? 'danger' : ( $is_waiting || ! $eligible || is_wp_error( $manual_allowed ) ? 'warning' : 'success' );
+            $consent_tone = $opted_out ? 'danger' : ( $eligible ? 'success' : 'warning' );
+            echo '<tr><td><div class="wc-pvr-customer-cell"><span class="wc-pvr-avatar" aria-hidden="true">' . esc_html( $this->customer_initials( $customer, $email ) ) . '</span><div>';
+            if ( '' !== $customer ) { echo '<strong>' . esc_html( $customer ) . '</strong>'; }
+            echo '<code>' . esc_html( $email ) . '</code>';
+            if ( $user ) { echo '<small>' . esc_html( sprintf( __( 'Customer #%d', 'wc-product-view-reminder-lite' ), absint( $user->ID ) ) ) . '</small>'; }
+            else { echo '<small>' . esc_html__( 'Tracked email', 'wc-product-view-reminder-lite' ) . '</small>'; }
+            echo '</div></div></td><td><div class="wc-pvr-product-cell">';
+            if ( $product ) { echo wp_kses_post( $product->get_image( array( 48, 48 ) ) ) . '<div><a href="' . esc_url( get_edit_post_link( $product->get_id() ) ) . '">' . esc_html( $product->get_name() ) . '</a><small>' . wp_kses_post( wc_price( $product->get_price() ) ) . '</small></div>'; }
+            else { echo esc_html__( 'Product unavailable', 'wc-product-view-reminder-lite' ); }
+            echo '</div></td><td><time datetime="' . esc_attr( $this->machine_datetime( $row->view_time ) ) . '">' . esc_html( $this->display_datetime( $row->view_time ) ) . '</time></td><td>' . $this->status_badge( $consent_label, $consent_tone ) . '</td><td>' . $this->status_badge( $eligibility_label, $eligibility_tone, $opted_out ? __( 'A recorded opt-out blocks all positive consent signals.', 'wc-product-view-reminder-lite' ) : '' ) . '</td><td>' . ( $scheduled ? '<time datetime="' . esc_attr( $this->machine_datetime( $scheduled ) ) . '">' . esc_html( $this->display_datetime( $scheduled ) ) . '</time>' : esc_html__( 'Unavailable', 'wc-product-view-reminder-lite' ) ) . '</td><td>' . $this->status_badge( $status, $status_tone ) . '</td><td>' . $this->status_badge( $row->purchased ? __( 'Purchased', 'wc-product-view-reminder-lite' ) : __( 'No purchase recorded', 'wc-product-view-reminder-lite' ), $row->purchased ? 'danger' : 'neutral' ) . '</td><td><div class="wc-pvr-row-actions">';
+            echo '<details class="wc-pvr-row-details"><summary class="button button-secondary">' . esc_html__( 'View details', 'wc-product-view-reminder-lite' ) . '</summary><div><p><strong>' . esc_html__( 'Current eligibility:', 'wc-product-view-reminder-lite' ) . '</strong> ' . esc_html( is_wp_error( $manual_allowed ) ? $manual_allowed->get_error_message() : __( 'Ready for a manual send, subject to a final check.', 'wc-product-view-reminder-lite' ) ) . '</p><p><strong>' . esc_html__( 'Consent:', 'wc-product-view-reminder-lite' ) . '</strong> ' . esc_html( $consent_label ) . '</p><p><strong>' . esc_html__( 'Reminder type:', 'wc-product-view-reminder-lite' ) . '</strong> ' . esc_html( ! empty( $row->added_to_cart ) ? __( 'Cart reminder', 'wc-product-view-reminder-lite' ) : __( 'Product view reminder', 'wc-product-view-reminder-lite' ) ) . '</p></div></details>';
             if ( ! $row->view_reminder_sent && ! $row->cart_reminder_sent && ! is_wp_error( $manual_allowed ) ) {
                 echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="wc-pvr-manual-send">';
                 echo '<input type="hidden" name="action" value="wc_pvr_send_reminder"><input type="hidden" name="view_id" value="' . esc_attr( absint( $row->id ) ) . '"><input type="hidden" name="confirmed" value="0">';
@@ -221,16 +411,15 @@ class WC_PVR_Admin_Settings {
                 echo '<button type="submit" class="button button-primary" data-confirm="' . esc_attr__( 'Send this reminder now? Consent, opt-out, purchase, and frequency checks will run again.', 'wc-product-view-reminder-lite' ) . '">' . esc_html__( 'Send Reminder', 'wc-product-view-reminder-lite' ) . '</button></form>';
             } else {
                 $reason = is_wp_error( $manual_allowed ) ? $manual_allowed->get_error_message() : __( 'A reminder has already been accepted.', 'wc-product-view-reminder-lite' );
-                echo '<span class="description">' . esc_html( $reason ) . '</span>';
+                echo '<button type="button" class="button" disabled aria-describedby="wc-pvr-block-' . esc_attr( absint( $row->id ) ) . '">' . esc_html__( 'Send Reminder', 'wc-product-view-reminder-lite' ) . '</button><small class="wc-pvr-action-reason" id="wc-pvr-block-' . esc_attr( absint( $row->id ) ) . '">' . esc_html( $reason ) . '</small>';
             }
-            echo '</td></tr>';
+            echo '</div></td></tr>';
         }
         echo '</tbody></table></div>';
         $pages = (int) ceil( $total / $per_page );
-        if ( $pages > 1 ) { echo '<div class="tablenav"><div class="tablenav-pages">' . wp_kses_post( paginate_links( array( 'base' => add_query_arg( array( 'paged' => '%#%', 's' => $search ) ), 'format' => '', 'current' => $paged, 'total' => $pages ) ) ) . '</div></div>'; }
-        echo '<p class="description">' . esc_html__( 'Manual sends bypass only the waiting period. Consent, opt-outs, product availability, purchase suppression, duplicate prevention, and frequency limits remain enforced. “Accepted” means wp_mail accepted the message, not confirmed delivery.', 'wc-product-view-reminder-lite' ) . '</p></div>';
+        if ( $pages > 1 ) { echo '<div class="tablenav"><div class="tablenav-pages">' . wp_kses_post( paginate_links( array( 'base' => add_query_arg( array( 'page' => 'wc-pvr-reminders', 'paged' => '%#%', 's' => $search, 'view_status' => $view_filter ), admin_url( 'admin.php' ) ), 'format' => '', 'current' => $paged, 'total' => $pages ) ) ) . '</div></div>'; }
+        echo '<p class="wc-pvr-note">' . esc_html__( 'Manual sends may skip the waiting period, but consent, opt-outs, product availability, purchase checks, duplicate prevention, and frequency limits still apply. Mail acceptance does not confirm inbox delivery.', 'wc-product-view-reminder-lite' ) . '</p></div>';
     }
-
     private function history_table_exists() {
         global $wpdb;
         $table = WC_PVR_Consent::history_table_name();
@@ -238,7 +427,7 @@ class WC_PVR_Admin_Settings {
     }
 
     private function safe_date_filter( $key, $fallback ) {
-        $value = isset( $_GET[ $key ] ) ? sanitize_text_field( wp_unslash( $_GET[ $key ] ) ) : $fallback;
+        $value = isset( $_GET[ $key ] ) && is_scalar( $_GET[ $key ] ) ? sanitize_text_field( wp_unslash( $_GET[ $key ] ) ) : $fallback;
         if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $value ) ) { return $fallback; }
         $parts = array_map( 'intval', explode( '-', $value ) );
         return checkdate( $parts[1], $parts[2], $parts[0] ) ? $value : $fallback;
@@ -249,17 +438,18 @@ class WC_PVR_Admin_Settings {
         global $wpdb;
         $history = WC_PVR_Consent::history_table_name();
         $views = $wpdb->prefix . 'wc_pvr_views';
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'Reminder History', 'wc-product-view-reminder-lite' ) . '</h1>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header( __( 'Reminder History', 'wc-product-view-reminder-lite' ), __( 'Review recorded reminder attempts, outcomes, retry counts, and the reason an attempt was blocked.', 'wc-product-view-reminder-lite' ), array( array( 'page' => 'wc-pvr-reminders', 'label' => __( 'Customer Reminders', 'wc-product-view-reminder-lite' ) ), array( 'page' => 'wc-pvr-analytics', 'label' => __( 'Analytics', 'wc-product-view-reminder-lite' ) ) ) );
         if ( ! $this->history_table_exists() ) { echo '<div class="notice notice-warning"><p>' . esc_html__( 'Reminder history storage is not available. Run the RecoverFlow storage setup from Settings.', 'wc-product-view-reminder-lite' ) . '</p></div></div>'; return; }
         $today = current_datetime()->format( 'Y-m-d' );
         $from = $this->safe_date_filter( 'date_from', current_datetime()->modify( '-30 days' )->format( 'Y-m-d' ) );
         $to = $this->safe_date_filter( 'date_to', $today );
         if ( $from > $to ) { $from = $to; }
-        $status = isset( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
+        $status = isset( $_GET['status'] ) && is_scalar( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
         if ( ! in_array( $status, array( '', 'accepted', 'failed', 'blocked', 'pending' ), true ) ) { $status = ''; }
-        $trigger = isset( $_GET['trigger'] ) ? sanitize_key( wp_unslash( $_GET['trigger'] ) ) : '';
+        $trigger = isset( $_GET['trigger'] ) && is_scalar( $_GET['trigger'] ) ? sanitize_key( wp_unslash( $_GET['trigger'] ) ) : '';
         if ( ! in_array( $trigger, array( '', 'automatic', 'manual' ), true ) ) { $trigger = ''; }
-        $search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
+        $search = isset( $_GET['s'] ) && is_scalar( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
         $where = array( 'h.attempted_at >= %s', 'h.attempted_at < %s' );
         $to_exclusive = ( new DateTimeImmutable( $to . ' 00:00:00', wp_timezone() ) )->modify( '+1 day' )->format( 'Y-m-d H:i:s' );
         $args = array( $from . ' 00:00:00', $to_exclusive );
@@ -269,7 +459,7 @@ class WC_PVR_Admin_Settings {
         $where_sql = ' WHERE ' . implode( ' AND ', $where );
         $total = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$history} h LEFT JOIN {$views} v ON v.id = h.view_id{$where_sql}", $args ) );
         $per_page = 25;
-        $paged = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
+        $paged = isset( $_GET['paged'] ) && is_scalar( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1;
         $offset = ( $paged - 1 ) * $per_page;
         $query_args = $args;
         $query_args[] = $per_page;
@@ -281,13 +471,16 @@ class WC_PVR_Admin_Settings {
         echo '<p class="description">' . esc_html__( '“wp_mail accepted” means WordPress accepted the message for sending. It does not confirm delivery to an inbox. Failure codes are technical identifiers; blocked rows explain why a manual request did not reach the mailer.', 'wc-product-view-reminder-lite' ) . '</p>';
         if ( empty( $rows ) ) { echo '<p>' . esc_html__( 'No reminder attempts match these filters.', 'wc-product-view-reminder-lite' ) . '</p>'; }
         else {
-            echo '<div class="wc-pvr-table-wrap"><table class="widefat striped"><thead><tr><th>' . esc_html__( 'Attempt time', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Customer', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Product', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Type', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Trigger', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Result', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Reason', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Retry count', 'wc-product-view-reminder-lite' ) . '</th></tr></thead><tbody>';
+            echo '<div class="wc-pvr-table-wrap"><table class="widefat striped"><thead><tr><th>' . esc_html__( 'Attempt time', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Customer', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Product', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Type', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Trigger', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Result', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Details', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Retry count', 'wc-product-view-reminder-lite' ) . '</th></tr></thead><tbody>';
             foreach ( $rows as $row ) {
                 $product = wc_get_product( absint( $row->product_id ) );
                 $result_label = 'accepted' === $row->result ? __( 'wp_mail accepted', 'wc-product-view-reminder-lite' ) : ( 'pending' === $row->result ? __( 'Outcome unknown', 'wc-product-view-reminder-lite' ) : ( 'blocked' === $row->result ? __( 'Blocked', 'wc-product-view-reminder-lite' ) : __( 'Failed', 'wc-product-view-reminder-lite' ) ) );
                 $customer_reference = $row->email ? $row->email : ( absint( $row->user_id ) ? sprintf( __( 'Customer #%d', 'wc-product-view-reminder-lite' ), absint( $row->user_id ) ) : sprintf( __( 'Deleted view #%d', 'wc-product-view-reminder-lite' ), absint( $row->view_id ) ) );
                 $failure_reason = 'pending' === $row->result ? __( 'Worker stopped before recording a result; delivery status is unknown.', 'wc-product-view-reminder-lite' ) : $this->failure_reason_label( $row->failure_code );
-                echo '<tr><td>' . esc_html( $row->attempted_at ) . '</td><td>' . esc_html( $customer_reference ) . '</td><td>' . esc_html( $product ? $product->get_name() : sprintf( __( 'Deleted product #%d', 'wc-product-view-reminder-lite' ), absint( $row->product_id ) ) ) . '</td><td>' . esc_html( ucfirst( $row->reminder_type ) ) . '</td><td>' . esc_html( ucfirst( $row->trigger_type ) ) . '</td><td>' . esc_html( $result_label ) . '</td><td>' . esc_html( $failure_reason ) . '</td><td>' . esc_html( absint( $row->retry_count ) ) . '</td></tr>';
+                $result_tone = 'accepted' === $row->result ? 'success' : ( 'failed' === $row->result ? 'danger' : ( 'blocked' === $row->result ? 'warning' : 'info' ) );
+                $type_label = 'cart' === $row->reminder_type ? __( 'Cart reminder', 'wc-product-view-reminder-lite' ) : __( 'Product view', 'wc-product-view-reminder-lite' );
+                $trigger_label = 'manual' === $row->trigger_type ? __( 'Manual', 'wc-product-view-reminder-lite' ) : __( 'Automatic', 'wc-product-view-reminder-lite' );
+                echo '<tr><td><time datetime="' . esc_attr( $this->machine_datetime( $row->attempted_at ) ) . '">' . esc_html( $this->display_datetime( $row->attempted_at ) ) . '</time></td><td>' . esc_html( $customer_reference ) . '</td><td>' . esc_html( $product ? $product->get_name() : sprintf( __( 'Deleted product #%d', 'wc-product-view-reminder-lite' ), absint( $row->product_id ) ) ) . '</td><td>' . $this->status_badge( $type_label, 'neutral' ) . '</td><td>' . $this->status_badge( $trigger_label, 'info' ) . '</td><td>' . $this->status_badge( $result_label, $result_tone, 'accepted' === $row->result ? __( 'Accepted by the configured mail transport; inbox delivery is not confirmed.', 'wc-product-view-reminder-lite' ) : '' ) . '</td><td><details class="wc-pvr-history-details"><summary>' . esc_html__( 'Inspect', 'wc-product-view-reminder-lite' ) . '</summary><p>' . esc_html( $failure_reason ) . '</p></details></td><td>' . esc_html( absint( $row->retry_count ) ) . '</td></tr>';
             }
             echo '</tbody></table></div>';
         }
@@ -321,12 +514,14 @@ class WC_PVR_Admin_Settings {
         global $wpdb;
         $views = $wpdb->prefix . 'wc_pvr_views';
         $history = WC_PVR_Consent::history_table_name();
-        $days = isset( $_GET['days'] ) ? absint( $_GET['days'] ) : 30;
+        $days = isset( $_GET['days'] ) && is_scalar( $_GET['days'] ) ? absint( wp_unslash( $_GET['days'] ) ) : 30;
         if ( ! in_array( $days, array( 7, 30, 90 ), true ) ) { $days = 30; }
         $from_dt = current_datetime()->modify( '-' . ( $days - 1 ) . ' days' )->setTime( 0, 0, 0 );
         $from = $from_dt->format( 'Y-m-d H:i:s' );
         $to = current_datetime()->modify( '+1 day' )->setTime( 0, 0, 0 )->format( 'Y-m-d H:i:s' );
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'RecoverFlow Analytics', 'wc-product-view-reminder-lite' ) . '</h1><form method="get"><input type="hidden" name="page" value="wc-pvr-analytics"><label for="wc-pvr-analytics-days">' . esc_html__( 'Date range', 'wc-product-view-reminder-lite' ) . '</label> <select id="wc-pvr-analytics-days" name="days"><option value="7" ' . selected( $days, 7, false ) . '>7 ' . esc_html__( 'days', 'wc-product-view-reminder-lite' ) . '</option><option value="30" ' . selected( $days, 30, false ) . '>30 ' . esc_html__( 'days', 'wc-product-view-reminder-lite' ) . '</option><option value="90" ' . selected( $days, 90, false ) . '>90 ' . esc_html__( 'days', 'wc-product-view-reminder-lite' ) . '</option></select> <button class="button">' . esc_html__( 'Apply', 'wc-product-view-reminder-lite' ) . '</button></form>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header( __( 'RecoverFlow Analytics', 'wc-product-view-reminder-lite' ), __( 'Explore recorded views and reminder outcomes over a selected period. All figures come from stored plugin records.', 'wc-product-view-reminder-lite' ), array( array( 'page' => 'wc-pvr-history', 'label' => __( 'Reminder History', 'wc-product-view-reminder-lite' ) ) ) );
+        echo '<form method="get" class="wc-pvr-filters"><input type="hidden" name="page" value="wc-pvr-analytics"><label for="wc-pvr-analytics-days">' . esc_html__( 'Date range', 'wc-product-view-reminder-lite' ) . ' <select id="wc-pvr-analytics-days" name="days"><option value="7" ' . selected( $days, 7, false ) . '>7 ' . esc_html__( 'days', 'wc-product-view-reminder-lite' ) . '</option><option value="30" ' . selected( $days, 30, false ) . '>30 ' . esc_html__( 'days', 'wc-product-view-reminder-lite' ) . '</option><option value="90" ' . selected( $days, 90, false ) . '>90 ' . esc_html__( 'days', 'wc-product-view-reminder-lite' ) . '</option></select></label><button class="button button-primary">' . esc_html__( 'Apply', 'wc-product-view-reminder-lite' ) . '</button></form>';
         if ( ! $this->views_table_exists() ) { echo '<p>' . esc_html__( 'Tracking data is not available.', 'wc-product-view-reminder-lite' ) . '</p></div>'; return; }
         if ( ! $this->history_table_exists() ) { echo '<div class="notice notice-warning"><p>' . esc_html__( 'Reminder history storage is not available. Run RecoverFlow storage setup from Settings.', 'wc-product-view-reminder-lite' ) . '</p></div></div>'; return; }
         $views_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$views} WHERE view_time >= %s AND view_time < %s", $from, $to ) );
@@ -353,10 +548,31 @@ class WC_PVR_Admin_Settings {
         $top_views = $wpdb->get_results( $wpdb->prepare( "SELECT product_id,COUNT(*) AS total FROM {$views} WHERE view_time >= %s AND view_time < %s GROUP BY product_id ORDER BY total DESC LIMIT 10", $from, $to ) );
         $top_reminded = $wpdb->get_results( $wpdb->prepare( "SELECT product_id,COUNT(*) AS total FROM {$history} WHERE attempted_at >= %s AND attempted_at < %s AND result = 'accepted' AND trigger_type IN ('automatic','manual') GROUP BY product_id ORDER BY total DESC LIMIT 10", $from, $to ) );
         echo '<div class="wc-pvr-dashboard-grid"><section class="wc-pvr-card"><h2>' . esc_html__( 'Top viewed products', 'wc-product-view-reminder-lite' ) . '</h2>' . $this->render_product_ranking( $top_views ) . '</section><section class="wc-pvr-card"><h2>' . esc_html__( 'Top reminded products', 'wc-product-view-reminder-lite' ) . '</h2>' . $this->render_product_ranking( $top_reminded ) . '</section></div>';
-        $daily_attempts = $wpdb->get_results( $wpdb->prepare( "SELECT DATE(attempted_at) AS day,result,COUNT(*) AS total FROM {$history} WHERE attempted_at >= %s AND attempted_at < %s GROUP BY DATE(attempted_at),result ORDER BY day ASC", $from, $to ) );
-        echo '<section class="wc-pvr-card"><h2>' . esc_html__( 'Reminder activity', 'wc-product-view-reminder-lite' ) . '</h2>';
-        if ( empty( $daily_attempts ) ) { echo '<p>' . esc_html__( 'No reminder attempts in this date range.', 'wc-product-view-reminder-lite' ) . '</p>'; }
-        else { echo '<div class="wc-pvr-table-wrap"><table class="widefat striped"><thead><tr><th>' . esc_html__( 'Date', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Result', 'wc-product-view-reminder-lite' ) . '</th><th>' . esc_html__( 'Attempts', 'wc-product-view-reminder-lite' ) . '</th></tr></thead><tbody>'; foreach ( $daily_attempts as $attempt ) { echo '<tr><td>' . esc_html( $attempt->day ) . '</td><td>' . esc_html( 'accepted' === $attempt->result ? __( 'wp_mail accepted', 'wc-product-view-reminder-lite' ) : ( 'failed' === $attempt->result ? __( 'Failed', 'wc-product-view-reminder-lite' ) : ( 'pending' === $attempt->result ? __( 'Outcome unknown', 'wc-product-view-reminder-lite' ) : __( 'Blocked', 'wc-product-view-reminder-lite' ) ) ) ) . '</td><td>' . esc_html( absint( $attempt->total ) ) . '</td></tr>'; } echo '</tbody></table></div>'; }
+        $daily_attempts = $wpdb->get_results( $wpdb->prepare( "SELECT DATE(attempted_at) AS day,SUM(result = 'accepted') AS accepted,SUM(result = 'failed') AS failed,SUM(result = 'blocked') AS blocked,SUM(result = 'pending') AS pending FROM {$history} WHERE attempted_at >= %s AND attempted_at < %s GROUP BY DATE(attempted_at) ORDER BY day ASC", $from, $to ) );
+        $activity_map = array();
+        foreach ( (array) $daily_attempts as $attempt ) { $activity_map[ $attempt->day ] = array( 'accepted' => absint( $attempt->accepted ), 'failed' => absint( $attempt->failed ), 'blocked' => absint( $attempt->blocked ), 'pending' => absint( $attempt->pending ) ); }
+        $activity_points = array();
+        $activity_max = 1;
+        for ( $index = 0; $index < $days; $index++ ) {
+            $day = $from_dt->modify( '+' . $index . ' days' )->format( 'Y-m-d' );
+            $values = isset( $activity_map[ $day ] ) ? $activity_map[ $day ] : array( 'accepted' => 0, 'failed' => 0, 'blocked' => 0, 'pending' => 0 );
+            $activity_points[] = array( 'day' => $day, 'values' => $values );
+            $activity_max = max( $activity_max, array_sum( $values ) );
+        }
+        echo '<section class="wc-pvr-card"><div class="wc-pvr-card-heading"><div><h2>' . esc_html__( 'Reminder activity', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Daily attempts, grouped by their recorded outcome.', 'wc-product-view-reminder-lite' ) . '</p></div></div><div class="wc-pvr-chart-legend"><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--accepted"></i>' . esc_html__( 'Accepted', 'wc-product-view-reminder-lite' ) . '</span><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--failed"></i>' . esc_html__( 'Failed', 'wc-product-view-reminder-lite' ) . '</span><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--blocked"></i>' . esc_html__( 'Blocked', 'wc-product-view-reminder-lite' ) . '</span><span><i class="wc-pvr-legend-dot wc-pvr-legend-dot--pending"></i>' . esc_html__( 'Outcome unknown', 'wc-product-view-reminder-lite' ) . '</span></div>';
+        if ( empty( $daily_attempts ) ) { echo '<div class="wc-pvr-empty wc-pvr-empty--compact"><p>' . esc_html__( 'No reminder attempts in this date range.', 'wc-product-view-reminder-lite' ) . '</p></div>'; }
+        else {
+            echo '<ul class="wc-pvr-trend-list wc-pvr-analytics-trend" aria-label="' . esc_attr__( 'Reminder attempts by day and outcome', 'wc-product-view-reminder-lite' ) . '">';
+            foreach ( $activity_points as $point ) {
+                $values = $point['values'];
+                $total_attempts = array_sum( $values );
+                $widths = array();
+                foreach ( $values as $key => $value ) { $widths[ $key ] = $value ? max( 1, (int) round( 100 * $value / $activity_max ) ) : 0; }
+                $day_label = wp_date( 'D, M j', ( new DateTimeImmutable( $point['day'] . ' 12:00:00', wp_timezone() ) )->getTimestamp() );
+                echo '<li><span class="wc-pvr-trend-date">' . esc_html( $day_label ) . '</span><span class="wc-pvr-trend-track wc-pvr-trend-track--stacked" aria-label="' . esc_attr( sprintf( __( '%1$d accepted, %2$d failed, %3$d blocked, %4$d outcome unknown', 'wc-product-view-reminder-lite' ), $values['accepted'], $values['failed'], $values['blocked'], $values['pending'] ) ) . '"><span class="wc-pvr-trend-fill wc-pvr-trend-fill--accepted" style="width:' . esc_attr( $widths['accepted'] ) . '%"></span><span class="wc-pvr-trend-fill wc-pvr-trend-fill--failed" style="width:' . esc_attr( $widths['failed'] ) . '%"></span><span class="wc-pvr-trend-fill wc-pvr-trend-fill--blocked" style="width:' . esc_attr( $widths['blocked'] ) . '%"></span><span class="wc-pvr-trend-fill wc-pvr-trend-fill--pending" style="width:' . esc_attr( $widths['pending'] ) . '%"></span></span><strong>' . esc_html( number_format_i18n( $total_attempts ) ) . '</strong></li>';
+            }
+            echo '</ul>';
+        }
         echo '</section></div>';
     }
 
@@ -406,9 +622,10 @@ class WC_PVR_Admin_Settings {
 
     public function consent_page() {
         if ( ! current_user_can( 'manage_options' ) ) { return; }
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'Consent Management', 'wc-product-view-reminder-lite' ) . '</h1>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header( __( 'Consent Management', 'wc-product-view-reminder-lite' ), __( 'Review recorded customer choices and confirm which consent integrations are connected. This page cannot opt customers in.', 'wc-product-view-reminder-lite' ) );
         if ( ! WC_PVR_Consent::is_installed() ) { echo '<div class="notice notice-warning"><p>' . esc_html__( 'Consent ledger storage is not ready. Complete storage setup from Settings first.', 'wc-product-view-reminder-lite' ) . '</p></div></div>'; return; }
-        if ( isset( $_GET['wc_pvr_revocation'] ) ) {
+        if ( isset( $_GET['wc_pvr_revocation'] ) && is_scalar( $_GET['wc_pvr_revocation'] ) ) {
             $saved = 'saved' === sanitize_key( wp_unslash( $_GET['wc_pvr_revocation'] ) );
             echo '<div class="notice ' . ( $saved ? 'notice-success' : 'notice-error' ) . ' is-dismissible"><p>' . esc_html( $saved ? __( 'The verified revocation was recorded. This customer is now opted out.', 'wc-product-view-reminder-lite' ) : __( 'The revocation could not be recorded. Refresh the consent record and try again.', 'wc-product-view-reminder-lite' ) ) . '</p></div>';
         }
@@ -420,9 +637,9 @@ class WC_PVR_Admin_Settings {
         echo '<div class="wc-pvr-dashboard-grid"><section class="wc-pvr-stat-card"><h2>' . esc_html__( 'Currently opted in', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html( number_format_i18n( $opted_in ) ) . '</p></section><section class="wc-pvr-stat-card"><h2>' . esc_html__( 'Currently opted out', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html( number_format_i18n( $opted_out ) ) . '</p></section></div>';
         $eligibility_filter = has_filter( 'wc_pvr_customer_is_eligible_for_marketing' );
         $optout_filter = has_filter( 'wc_pvr_customer_has_marketing_opted_out' );
-        echo '<section class="wc-pvr-card"><h2>' . esc_html__( 'Eligibility and integration status', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Product views are not consent. Customers without a current explicit opt-in or an approved store adapter are denied by default. A RecoverFlow opt-out always overrides positive signals.', 'wc-product-view-reminder-lite' ) . '</p><ul><li>' . esc_html__( 'Eligibility adapter:', 'wc-product-view-reminder-lite' ) . ' <strong>' . esc_html( $eligibility_filter ? __( 'registered', 'wc-product-view-reminder-lite' ) : __( 'not registered; default deny', 'wc-product-view-reminder-lite' ) ) . '</strong></li><li>' . esc_html__( 'Additional opt-out adapter:', 'wc-product-view-reminder-lite' ) . ' <strong>' . esc_html( $optout_filter ? __( 'registered', 'wc-product-view-reminder-lite' ) : __( 'not registered', 'wc-product-view-reminder-lite' ) ) . '</strong></li></ul><p class="description">' . esc_html__( 'The plugin can confirm a recorded opt-out or internal opt-in here. An external consent adapter must provide its own customer-level status and explanation. A filter can be registered but still deny every customer.', 'wc-product-view-reminder-lite' ) . '</p></section>';
+        echo '<section class="wc-pvr-card"><h2>' . esc_html__( 'Reminder eligibility', 'wc-product-view-reminder-lite' ) . '</h2><p>' . esc_html__( 'Product views are not consent. Without a current explicit opt-in or a trusted store adapter, marketing reminders are denied. Recorded opt-outs always override positive signals.', 'wc-product-view-reminder-lite' ) . '</p>' . $this->status_badge( $eligibility_filter ? __( 'Eligibility adapter registered', 'wc-product-view-reminder-lite' ) : __( 'No adapter; default deny', 'wc-product-view-reminder-lite' ), $eligibility_filter ? 'info' : 'warning' ) . ' ' . $this->status_badge( $optout_filter ? __( 'Opt-out adapter registered', 'wc-product-view-reminder-lite' ) : __( 'No external opt-out adapter', 'wc-product-view-reminder-lite' ), $optout_filter ? 'info' : 'neutral' ) . '<details class="wc-pvr-integration-details"><summary>' . esc_html__( 'Integration diagnostics', 'wc-product-view-reminder-lite' ) . '</summary><p>' . esc_html__( 'A registered filter confirms that code is connected, not that a specific customer is eligible. The adapter must check the current customer-level status and any revoked consent with the store-approved consent source.', 'wc-product-view-reminder-lite' ) . '</p></details></section>';
         $search = isset( $_GET['s'] ) && is_scalar( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
-        $status = isset( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
+        $status = isset( $_GET['status'] ) && is_scalar( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
         if ( ! in_array( $status, array( '', 'opted_in', 'opted_out' ), true ) ) { $status = ''; }
         $where = array( "NOT EXISTS (SELECT 1 FROM {$table} newer WHERE newer.email_hash = c.email_hash AND newer.id > c.id)" );
         $args = array();
@@ -436,7 +653,7 @@ class WC_PVR_Admin_Settings {
         $where_sql = ' WHERE ' . implode( ' AND ', $where );
         $total = (int) $wpdb->get_var( $args ? $wpdb->prepare( "SELECT COUNT(*) FROM {$table} c{$where_sql}", $args ) : "SELECT COUNT(*) FROM {$table} c{$where_sql}" );
         $per_page = 25;
-        $paged = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
+        $paged = isset( $_GET['paged'] ) && is_scalar( $_GET['paged'] ) ? max( 1, absint( wp_unslash( $_GET['paged'] ) ) ) : 1;
         $query_args = $args;
         $query_args[] = $per_page;
         $query_args[] = ( $paged - 1 ) * $per_page;
@@ -488,7 +705,9 @@ class WC_PVR_Admin_Settings {
         $pending = $view_exists ? absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$views} WHERE purchased = 0 AND ((added_to_cart = 0 AND view_reminder_sent = 0 AND view_time <= %s) OR (added_to_cart = 1 AND cart_reminder_sent = 0 AND %d = 1 AND COALESCE(cart_added_at,view_time) <= %s))", $due_cutoff, $cart_enabled, $due_cutoff ) ) ) : 0;
         $failures = WC_PVR_Consent::is_installed() ? absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$history} WHERE result = 'failed' AND attempted_at >= %s", current_datetime()->modify( '-7 days' )->format( 'Y-m-d H:i:s' ) ) ) ) : 0;
         $sender = sanitize_email( get_option( 'wc_pvr_email_sender_email', get_option( 'admin_email' ) ) );
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'System Status', 'wc-product-view-reminder-lite' ) . '</h1><p class="description">' . esc_html__( 'A scheduled event indicates WP-Cron has a pending event. Only the last completed timestamp below confirms that the RecoverFlow callback ran to completion.', 'wc-product-view-reminder-lite' ) . '</p><div class="wc-pvr-table-wrap"><table class="widefat striped"><tbody>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header( __( 'System Status', 'wc-product-view-reminder-lite' ), __( 'Check plugin storage, purchase lookup, scheduled jobs, completed runs, and email configuration.', 'wc-product-view-reminder-lite' ) );
+        echo '<p class="wc-pvr-note">' . esc_html__( 'A scheduled WP-Cron event is not proof of execution. The last completed timestamp confirms that RecoverFlow recorded a completed callback.', 'wc-product-view-reminder-lite' ) . '</p><div class="wc-pvr-table-wrap"><table class="widefat striped"><tbody>';
         $rows = array(
             __( 'WordPress', 'wc-product-view-reminder-lite' ) => get_bloginfo( 'version' ),
             __( 'PHP', 'wc-product-view-reminder-lite' ) => PHP_VERSION,
@@ -511,7 +730,8 @@ class WC_PVR_Admin_Settings {
 
     public function templates_page() {
         if ( ! current_user_can( 'manage_options' ) ) { return; }
-        echo '<div class="wrap wc-pvr-admin"><h1>' . esc_html__( 'Email Templates', 'wc-product-view-reminder-lite' ) . '</h1>';
+        echo '<div class="wrap wc-pvr-admin">';
+        $this->render_page_header( __( 'Email Templates', 'wc-product-view-reminder-lite' ), __( 'Edit reminder wording, preview with synthetic data, and send local tests only to a .test address.', 'wc-product-view-reminder-lite' ) );
         settings_errors();
         if ( isset( $_GET['wc_pvr_test_result'] ) ) { $ok = 'accepted' === sanitize_key( wp_unslash( $_GET['wc_pvr_test_result'] ) ); echo '<div class="notice ' . ( $ok ? 'notice-success' : 'notice-error' ) . '"><p>' . esc_html( $ok ? __( 'Local test message was accepted by wp_mail(). Check LocalWP Mailpit/MailHog; acceptance does not prove delivery.', 'wc-product-view-reminder-lite' ) : __( 'Test send blocked or failed. Local testing requires a local environment and an address ending in .test.', 'wc-product-view-reminder-lite' ) ) . '</p></div>'; }
         echo '<p class="description">' . esc_html__( 'Placeholders are escaped before insertion. The preview and local test use synthetic data only. Edit and preview both product-view and cart reminder messages here.', 'wc-product-view-reminder-lite' ) . '</p><div class="wc-pvr-card"><form method="post" action="options.php">';
@@ -714,6 +934,9 @@ class WC_PVR_Admin_Settings {
         <div class="wrap wc-pvr-admin">
 
             <h1 class="wc-pvr-title">
+                <?php esc_html_e( 'RecoverFlow Settings', 'wc-product-view-reminder-lite' ); ?>
+            </h1>
+            <p class="wc-pvr-settings-intro"><?php esc_html_e( 'Tracking delay controls when a signed-in product view is recorded. Reminder waiting period controls the earliest time a reminder becomes eligible after that view or a cart addition. They are separate settings.', 'wc-product-view-reminder-lite' ); ?></p>
                 <?php esc_html_e( 'WooCommerce Product View Reminder', 'wc-product-view-reminder-lite' ); ?>
             </h1>
 
