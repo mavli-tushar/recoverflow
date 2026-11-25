@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.1.1 - Released 2026-11-25
+
+### Fixes
+
+- Stopped General Settings and Email Templates from wiping each other when saving (separate option groups).
+- Restored empty consent field text to the default wording instead of saving a blank label.
+- Made the reminder cooldown apply per customer + product, so a reminder for one product no longer blocks other products.
+- Cleared purchase suppression correctly after refunds so eligible customers can be reminded again.
+- Humanized reminder status, eligibility, and mail-related admin copy; clarified setup notices and validation messages.
+- Fixed empty default email bodies and ensured unsubscribe links work for consent-adapter customers.
+- Declared WooCommerce HPOS compatibility, hardened uninstall cleanup, and improved cron/first-save behavior.
+- Redesigned Dashboard and Analytics charts for clearer daily/weekly activity, and polished consent source labels, empty states, and privacy copy.
+
+### New in free
+
+- Quiet hours: optional automatic send window (for example 9:00–20:00) using the WordPress site timezone. Manual Send Reminder still works outside the window.
+- Configurable reminder cooldown: choose 3–30 days before the same customer can get another reminder for the same product.
+- Product image in emails: `{product_image}` placeholder (included in default templates).
+- Exclude products and categories: skip tracking and reminders by product ID or product category.
+
+### Verification
+
+- PHP syntax checks on changed plugin files.
+- `tests/reminder-service-smoke.php` coverage for quiet hours, cooldown, product image rendering, and exclusions.
+
 ## 2.1 - Released 2026-11-21 (Admin UI/UX refinement)
 
 - Redesigned the RecoverFlow Dashboard with compact 30-day KPIs, daily views and reminder outcome charts, queue readiness, recent activity, and direct navigation to key tasks.

@@ -1,12 +1,17 @@
 <?php
 /*
-Plugin Name: WooCommerce Product View Reminder Lite
-Description: Sends reminder email when a customer views a WooCommerce product but does not purchase it.
-Version: 2.1
+Plugin Name: RecoverFlow — WooCommerce Product View Reminder Lite
+Description: Sends reminder emails when a signed-in customer views a WooCommerce product but does not purchase it. Requires explicit marketing consent before sending.
+Version: 2.1.1
 Author: Tushar Malvi
+Requires at least: 6.2
+Requires PHP: 7.4
 Requires Plugins: woocommerce
+WC requires at least: 7.0
+WC tested up to: 10.5
 Text Domain: wc-product-view-reminder-lite
 Domain Path: /languages
+License: GPL-2.0-or-later
 */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -19,9 +24,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 |--------------------------------------------------------------------------
 */
 
-define( 'WC_PVR_VERSION', '2.1' );
+define( 'WC_PVR_VERSION', '2.1.1' );
 define( 'WC_PVR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WC_PVR_URL', plugin_dir_url( __FILE__ ) );
+
+/**
+ * Declare WooCommerce feature compatibility (HPOS + Cart/Checkout Blocks).
+ */
+add_action( 'before_woocommerce_init', function () {
+	if ( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
+		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', __FILE__, true );
+		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'cart_checkout_blocks', __FILE__, true );
+	}
+} );
 
 /*
 |--------------------------------------------------------------------------
@@ -259,18 +274,19 @@ add_action( 'wp', 'wc_pvr_schedule_cron' );
 
 function wc_pvr_reschedule_cron() {
 
-    $timestamp = wp_next_scheduled( 'wc_pvr_cron' );
+    wp_clear_scheduled_hook( 'wc_pvr_cron' );
 
-    if ( $timestamp ) {
-        wp_unschedule_event( $timestamp, 'wc_pvr_cron' );
+    $interval = sanitize_key( get_option( 'wc_pvr_cron_interval', 'hourly' ) );
+    $allowed  = array( '5min', '15min', '30min', 'hourly', 'twicedaily', 'daily' );
+    if ( ! in_array( $interval, $allowed, true ) ) {
+        $interval = 'hourly';
     }
-
-    $interval = get_option( 'wc_pvr_cron_interval', 'hourly' );
 
     wp_schedule_event( time(), $interval, 'wc_pvr_cron' );
 }
 
 add_action( 'update_option_wc_pvr_cron_interval', 'wc_pvr_reschedule_cron' );
+add_action( 'add_option_wc_pvr_cron_interval', 'wc_pvr_reschedule_cron' );
 
 
 /*
@@ -281,13 +297,9 @@ add_action( 'update_option_wc_pvr_cron_interval', 'wc_pvr_reschedule_cron' );
 
 function wc_pvr_clear_cron() {
 
-    $timestamp = wp_next_scheduled( 'wc_pvr_cron' );
-
-    if ( $timestamp ) {
-        wp_unschedule_event( $timestamp, 'wc_pvr_cron' );
-    }
-
+    wp_clear_scheduled_hook( 'wc_pvr_cron' );
     wp_clear_scheduled_hook( 'wc_pvr_retention_cleanup' );
+    wp_clear_scheduled_hook( 'wc_pvr_order_backfill' );
 
 }
 

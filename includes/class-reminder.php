@@ -8,6 +8,8 @@ class WC_PVR_Reminder {
 
 	const MAX_ATTEMPTS = 3;
 	const FREQUENCY_DAYS = 7;
+	const FREQUENCY_DAYS_MIN = 3;
+	const FREQUENCY_DAYS_MAX = 30;
 
 	public function __construct() {
 		add_action( 'wc_pvr_cron', array( $this, 'send_pvr_reminders' ) );
@@ -21,7 +23,89 @@ class WC_PVR_Reminder {
 		}
 	}
 
+	/** Reminder cooldown in days for the same customer + product (3–30). */
+	public static function frequency_days() {
+		$days = absint( get_option( 'wc_pvr_frequency_days', self::FREQUENCY_DAYS ) );
+		if ( $days < self::FREQUENCY_DAYS_MIN || $days > self::FREQUENCY_DAYS_MAX ) {
+			$days = self::FREQUENCY_DAYS;
+		}
+		return $days;
+	}
+
+	/** Parse a comma/space/newline separated or array list of IDs. */
+	public static function parse_id_list( $value ) {
+		if ( is_array( $value ) ) {
+			return array_values( array_unique( array_filter( array_map( 'absint', $value ) ) ) );
+		}
+		if ( ! is_scalar( $value ) || '' === trim( (string) $value ) ) {
+			return array();
+		}
+		$parts = preg_split( '/[\s,]+/', (string) $value, -1, PREG_SPLIT_NO_EMPTY );
+		return array_values( array_unique( array_filter( array_map( 'absint', (array) $parts ) ) ) );
+	}
+
+	/** Whether automatic sends are allowed at the current site-local hour. */
+	public static function is_within_send_window() {
+		if ( ! absint( get_option( 'wc_pvr_quiet_hours_enabled', 0 ) ) ) {
+			return true;
+		}
+		$start = min( 23, absint( get_option( 'wc_pvr_quiet_hours_start', 9 ) ) );
+		$end   = min( 23, absint( get_option( 'wc_pvr_quiet_hours_end', 20 ) ) );
+		$hour  = absint( wp_date( 'G' ) );
+		if ( $start === $end ) {
+			return true;
+		}
+		if ( $start < $end ) {
+			return ( $hour >= $start && $hour < $end );
+		}
+		return ( $hour >= $start || $hour < $end );
+	}
+
+	/** Whether a product (or its category / parent) is excluded from reminders. */
+	public static function is_product_excluded( $product_id ) {
+		$product_id = absint( $product_id );
+		if ( ! $product_id ) {
+			return true;
+		}
+		$excluded_products = self::parse_id_list( get_option( 'wc_pvr_exclude_product_ids', '' ) );
+		if ( in_array( $product_id, $excluded_products, true ) ) {
+			return true;
+		}
+		$excluded_cats = self::parse_id_list( get_option( 'wc_pvr_exclude_category_ids', '' ) );
+		if ( empty( $excluded_cats ) || ! function_exists( 'wc_get_product' ) ) {
+			return false;
+		}
+		$product = wc_get_product( $product_id );
+		if ( ! $product ) {
+			return false;
+		}
+		$check_ids = array( $product_id );
+		if ( is_callable( array( $product, 'is_type' ) ) && $product->is_type( 'variation' ) && is_callable( array( $product, 'get_parent_id' ) ) ) {
+			$parent_id = absint( $product->get_parent_id() );
+			if ( $parent_id ) {
+				$check_ids[] = $parent_id;
+				if ( in_array( $parent_id, $excluded_products, true ) ) {
+					return true;
+				}
+			}
+		}
+		foreach ( $check_ids as $check_id ) {
+			$terms = wp_get_post_terms( $check_id, 'product_cat', array( 'fields' => 'ids' ) );
+			if ( is_wp_error( $terms ) || empty( $terms ) ) {
+				continue;
+			}
+			if ( array_intersect( $excluded_cats, array_map( 'absint', $terms ) ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public function send_pvr_reminders() {
+		if ( ! self::is_within_send_window() ) {
+			update_option( 'wc_pvr_last_cron_completed_at', current_time( 'mysql' ), false );
+			return;
+		}
 		global $wpdb;
 		$table = $wpdb->prefix . 'wc_pvr_views';
 		$cart_enabled = absint( get_option( 'wc_pvr_cart_reminder', 0 ) );
@@ -68,15 +152,18 @@ class WC_PVR_Reminder {
 	public function can_send( $view, $bypass_wait = false, $live_purchase_check = true ) {
 		global $wpdb;
 		if ( ! $view || ! WC_PVR_Consent::is_installed() ) {
-			return new WP_Error( 'storage_unavailable', __( 'RecoverFlow storage is not ready.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'storage_unavailable', __( 'RecoverFlow setup is not finished yet.', 'wc-product-view-reminder-lite' ) );
 		}
 		if ( ! get_option( 'wc_pvr_orders_backfill_complete', 0 ) ) {
-			return new WP_Error( 'purchase_index_building', __( 'Purchase history is still being indexed. Try again when setup is complete.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'purchase_index_building', __( 'Still scanning past orders. Try again once the scan finishes.', 'wc-product-view-reminder-lite' ) );
 		}
 		$product_id = absint( $view->product_id );
 		$product = $product_id ? wc_get_product( $product_id ) : false;
 		if ( ! $product || 'publish' !== get_post_status( $product->get_id() ) || ! $product->get_permalink() ) {
 			return new WP_Error( 'invalid_product', __( 'The product is no longer available.', 'wc-product-view-reminder-lite' ) );
+		}
+		if ( self::is_product_excluded( $product_id ) ) {
+			return new WP_Error( 'product_excluded', __( 'This product is excluded from reminders.', 'wc-product-view-reminder-lite' ) );
 		}
 		$email = sanitize_email( $view->email );
 		if ( ! is_email( $email ) ) {
@@ -89,54 +176,70 @@ class WC_PVR_Reminder {
 		$integration_opted_out = (bool) apply_filters( 'wc_pvr_customer_has_marketing_opted_out', $ledger_opted_out, $user_id, $email, $view );
 		$explicit_opt_out = $ledger_opted_out || $integration_opted_out;
 		if ( $explicit_opt_out || ( ! $external_eligible && 'opted_in' !== $consent_status ) ) {
-			return new WP_Error( $explicit_opt_out ? 'customer_opted_out' : 'consent_required', __( 'Current marketing consent does not allow this reminder.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( $explicit_opt_out ? 'customer_opted_out' : 'consent_required', __( 'This customer has not agreed to marketing emails.', 'wc-product-view-reminder-lite' ) );
 		}
 		$type = $this->reminder_type( $view );
-		if ( ! $type ) { return new WP_Error( 'cart_reminder_disabled', __( 'Cart reminders are disabled.', 'wc-product-view-reminder-lite' ) ); }
-		if ( $this->was_sent( $view, $type ) ) { return new WP_Error( 'already_sent', __( 'This reminder was already accepted by wp_mail().', 'wc-product-view-reminder-lite' ) ); }
+		if ( ! $type ) { return new WP_Error( 'cart_reminder_disabled', __( 'Cart reminders are turned off.', 'wc-product-view-reminder-lite' ) ); }
+		if ( $this->was_sent( $view, $type ) ) { return new WP_Error( 'already_sent', __( 'This reminder was already sent.', 'wc-product-view-reminder-lite' ) ); }
 		$email_hash = WC_PVR_Consent::email_hash( $email );
 		$history_table = WC_PVR_Consent::history_table_name();
 		$pending_cutoff = current_datetime()->modify( '-1 day' )->format( 'Y-m-d H:i:s' );
 		if ( $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$history_table} WHERE email_hash = %s AND result = 'pending' AND attempted_at >= %s LIMIT 1", $email_hash, $pending_cutoff ) ) ) {
-			return new WP_Error( 'send_outcome_unknown', __( 'A previous attempt for this customer has no recorded outcome. Review Reminder History before retrying any product reminder.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'send_outcome_unknown', __( 'We do not know whether the last email to this customer went out. Check Reminder History before trying again.', 'wc-product-view-reminder-lite' ) );
 		}
-		$weekly_cutoff = current_datetime()->modify( '-' . self::FREQUENCY_DAYS . ' days' )->format( 'Y-m-d H:i:s' );
-		if ( $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$history_table} WHERE email_hash = %s AND result = 'accepted' AND attempted_at >= %s LIMIT 1", $email_hash, $weekly_cutoff ) ) ) {
-			return new WP_Error( 'customer_frequency_limit', __( 'A reminder was accepted for this customer within the last seven days.', 'wc-product-view-reminder-lite' ) );
+		$frequency_days = self::frequency_days();
+		$weekly_cutoff = current_datetime()->modify( '-' . $frequency_days . ' days' )->format( 'Y-m-d H:i:s' );
+		/* One accepted reminder per customer + product within the cooldown; other products stay eligible. */
+		if ( $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$history_table} WHERE email_hash = %s AND product_id = %d AND result = 'accepted' AND attempted_at >= %s LIMIT 1", $email_hash, $product_id, $weekly_cutoff ) ) ) {
+			return new WP_Error(
+				'customer_frequency_limit',
+				sprintf(
+					/* translators: %d: cooldown days */
+					__( 'This customer already received a reminder for this product in the last %d days.', 'wc-product-view-reminder-lite' ),
+					$frequency_days
+				)
+			);
 		}
 		$daily_cutoff = current_datetime()->modify( '-1 day' )->format( 'Y-m-d H:i:s' );
 		$daily_attempts = absint( $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$history_table} WHERE email_hash = %s AND result IN ('accepted','failed') AND attempted_at >= %s", $email_hash, $daily_cutoff ) ) );
 		if ( $daily_attempts >= self::MAX_ATTEMPTS ) {
-			return new WP_Error( 'customer_rate_limit', __( 'The customer reached the maximum of three send attempts in 24 hours.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'customer_rate_limit', __( 'Too many attempts for this customer today. Try again tomorrow.', 'wc-product-view-reminder-lite' ) );
 		}
 		$store = isset( $GLOBALS['wc_pvr_order_store'] ) ? $GLOBALS['wc_pvr_order_store'] : null;
 		if ( ! $store instanceof WC_PVR_Order_Store ) {
-			return new WP_Error( 'purchase_check_unavailable', __( 'WooCommerce purchase verification is unavailable.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'purchase_check_unavailable', __( 'Purchase checks are unavailable right now.', 'wc-product-view-reminder-lite' ) );
 		}
 		if ( $store->has_paid_purchase( $view, $live_purchase_check ) ) {
 			$wpdb->update( $wpdb->prefix . 'wc_pvr_views', array( 'purchased' => 1 ), array( 'id' => absint( $view->id ) ), array( '%d' ), array( '%d' ) );
-			return new WP_Error( 'purchase_suppressed', __( 'A matching paid WooCommerce order exists for this product.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'purchase_suppressed', __( 'This customer already bought this product.', 'wc-product-view-reminder-lite' ) );
 		}
 		if ( ! $live_purchase_check && $view->purchased ) {
-			return new WP_Error( 'already_purchased', __( 'This product is marked as purchased.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'already_purchased', __( 'This customer already bought this product.', 'wc-product-view-reminder-lite' ) );
 		}
 		if ( $live_purchase_check && $view->purchased ) {
 			$wpdb->update( $wpdb->prefix . 'wc_pvr_views', array( 'purchased' => 0 ), array( 'id' => absint( $view->id ) ), array( '%d' ), array( '%d' ) );
 		}
 		$state = $this->attempt_state( $view, $type );
 		if ( $state['pending_recent'] ) {
-			return new WP_Error( 'send_outcome_unknown', __( 'A previous attempt has no recorded outcome. Review Reminder History before retrying.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'send_outcome_unknown', __( 'We do not know whether the last attempt was sent. Check Reminder History before trying again.', 'wc-product-view-reminder-lite' ) );
 		}
 		if ( $state['failed_count'] >= self::MAX_ATTEMPTS ) {
-			return new WP_Error( 'retry_limit_reached', __( 'The retry limit has been reached for this reminder.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'retry_limit_reached', __( 'Gave up after 3 tries for this reminder.', 'wc-product-view-reminder-lite' ) );
 		}
 		if ( $state['next_retry_at'] ) {
 			try { $retry_at = new DateTimeImmutable( $state['next_retry_at'], wp_timezone() ); }
 			catch ( Exception $exception ) { $retry_at = null; }
-			if ( $retry_at && $retry_at > current_datetime() ) { return new WP_Error( 'retry_backoff', __( 'This reminder is waiting for its next retry window.', 'wc-product-view-reminder-lite' ) ); }
+			if ( $retry_at && $retry_at > current_datetime() ) { return new WP_Error( 'retry_backoff', __( 'This reminder will be tried again shortly.', 'wc-product-view-reminder-lite' ) ); }
 		}
 		if ( $state['recent_accepted'] ) {
-			return new WP_Error( 'frequency_limit', __( 'A reminder was accepted within the last seven days.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error(
+				'frequency_limit',
+				sprintf(
+					/* translators: %d: cooldown days */
+					__( 'This customer already received a reminder for this product in the last %d days.', 'wc-product-view-reminder-lite' ),
+					self::frequency_days()
+				)
+			);
 		}
 		if ( ! $bypass_wait ) {
 			$delay = max( 0, absint( get_option( 'wc_pvr_reminder_delay', 24 ) ) );
@@ -197,7 +300,7 @@ class WC_PVR_Reminder {
 			if ( 'accepted' === $row->result ) {
 				try { $attempted_at = new DateTimeImmutable( $row->attempted_at, wp_timezone() ); }
 				catch ( Exception $exception ) { $attempted_at = null; }
-				if ( $attempted_at && $attempted_at >= $now->modify( '-' . self::FREQUENCY_DAYS . ' days' ) ) { $recent_accepted = true; }
+				if ( $attempted_at && $attempted_at >= $now->modify( '-' . self::frequency_days() . ' days' ) ) { $recent_accepted = true; }
 			}
 		}
 		return array( 'failed_count' => $failed, 'recent_accepted' => $recent_accepted, 'pending_recent' => $pending_recent, 'next_retry_at' => $next_retry );
@@ -240,6 +343,7 @@ class WC_PVR_Reminder {
 			$template = $this->render_template( $product, $customer_name, $email, $type, $user_id, $fresh, false );
 			$subject = $template['subject'];
 			$message = $template['message'];
+			$unsubscribe_url = isset( $template['unsubscribe_url'] ) ? $template['unsubscribe_url'] : '';
 			$failure_code = '';
 			$capture_error = function ( $error ) use ( &$failure_code ) {
 				if ( is_wp_error( $error ) ) { $failure_code = sanitize_key( $error->get_error_code() ); }
@@ -264,7 +368,7 @@ class WC_PVR_Reminder {
 					return new WP_Error( 'history_write_failed', __( 'The send attempt could not be recorded, so no email was sent.', 'wc-product-view-reminder-lite' ) );
 				}
 				try {
-					$sent = wp_mail( $email, $subject, $message, $this->mail_headers() );
+					$sent = wp_mail( $email, $subject, $message, $this->mail_headers( $unsubscribe_url ) );
 				} catch ( Throwable $exception ) {
 					$sent = false;
 					$failure_code = 'mailer_exception';
@@ -289,14 +393,14 @@ class WC_PVR_Reminder {
 				array( '%d' )
 			);
 			if ( false === $history_updated ) {
-				return new WP_Error( 'send_outcome_unknown', __( 'The mailer was called, but the result could not be saved. Check Reminder History and do not retry until this pending attempt is reviewed.', 'wc-product-view-reminder-lite' ) );
+				return new WP_Error( 'send_outcome_unknown', __( 'We tried to send this reminder but could not record whether it worked. Check Reminder History before trying again.', 'wc-product-view-reminder-lite' ) );
 			}
 			if ( $sent ) {
 				$sent_column = 'cart' === $type ? 'cart_reminder_sent' : 'view_reminder_sent';
 				$wpdb->update( $table, array( $sent_column => 1 ), array( 'id' => absint( $fresh->id ) ), array( '%d' ), array( '%d' ) );
-				return array( 'accepted' => true, 'message' => __( 'WordPress accepted the email for sending. Inbox delivery is not confirmed.', 'wc-product-view-reminder-lite' ) );
+				return array( 'accepted' => true, 'message' => __( 'Reminder sent. We cannot confirm it reached the inbox.', 'wc-product-view-reminder-lite' ) );
 			}
-			return new WP_Error( 'mail_failed', __( 'wp_mail() returned false. The attempt was recorded and may be retried within the retry limit.', 'wc-product-view-reminder-lite' ) );
+			return new WP_Error( 'mail_failed', __( 'The email could not be sent. It will be tried again automatically (up to 3 attempts).', 'wc-product-view-reminder-lite' ) );
 		} finally {
 			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock ) );
 		}
@@ -325,31 +429,64 @@ class WC_PVR_Reminder {
 		return false === $inserted ? false : absint( $wpdb->insert_id );
 	}
 
-	/** Shared renderer for reminders, synthetic preview, and local test messages. */
+	/** Default product-view reminder body used when the saved option is empty. */
+	public static function default_view_message() {
+		return "Hi {customer_name},\n\nYou viewed {product_name}.\n\n{product_image}\n\n{cta_button}\n\n{unsubscribe_url}";
+	}
+
+	/** Default cart reminder body used when the saved option is empty. */
+	public static function default_cart_message() {
+		return "Hi {customer_name},\n\nYou added {product_name} to your cart.\n\n{product_image}\n\n{cta_button}\n\n{unsubscribe_url}";
+	}
+
+	/** Shared renderer for reminders, preview, and local test messages. */
 	public function render_template( $product, $customer_name = '', $email = '', $type = 'view', $user_id = 0, $view = null, $synthetic = false ) {
 		$is_real_product = $product && is_object( $product ) && is_callable( array( $product, 'get_name' ) );
-		$product_name = $is_real_product ? $product->get_name() : __( 'Synthetic Product', 'wc-product-view-reminder-lite' );
-		$product_url = $is_real_product ? $product->get_permalink() : 'https://example.test/synthetic-product';
+		$product_name = $is_real_product ? $product->get_name() : __( 'Sample Product', 'wc-product-view-reminder-lite' );
+		$product_url = $is_real_product ? $product->get_permalink() : 'https://example.test/sample-product';
 		$price = $is_real_product ? wp_strip_all_tags( wc_price( $product->get_price() ) ) : '$0.00';
+		$product_image = '';
+		if ( $is_real_product && is_callable( array( $product, 'get_image_id' ) ) ) {
+			$image_id = absint( $product->get_image_id() );
+			$image_url = $image_id ? wp_get_attachment_image_url( $image_id, 'woocommerce_thumbnail' ) : '';
+			if ( ! $image_url && function_exists( 'wc_placeholder_img_src' ) ) {
+				$image_url = wc_placeholder_img_src( 'woocommerce_thumbnail' );
+			}
+			if ( $image_url ) {
+				$product_image = '<a href="' . esc_url( $product_url ) . '" style="display:inline-block"><img src="' . esc_url( $image_url ) . '" alt="' . esc_attr( wp_strip_all_tags( $product_name ) ) . '" width="200" style="max-width:200px;width:100%;height:auto;border:0;display:block;border-radius:4px;"></a>';
+			}
+		} elseif ( $synthetic ) {
+			$product_image = '<div style="width:200px;height:140px;background:#f0f0f1;border-radius:4px;color:#646970;font:14px/140px sans-serif;text-align:center;">' . esc_html__( 'Product image', 'wc-product-view-reminder-lite' ) . '</div>';
+		}
 		$email = sanitize_email( $email );
 		$consent = isset( $GLOBALS['wc_pvr_consent'] ) ? $GLOBALS['wc_pvr_consent'] : null;
 		$unsubscribe_url = $synthetic ? 'https://example.test/unsubscribe-preview' : ( $consent instanceof WC_PVR_Consent ? $consent->create_unsubscribe_url( $email ) : '' );
 		if ( ! $synthetic ) { $unsubscribe_url = apply_filters( 'wc_pvr_unsubscribe_url', $unsubscribe_url, absint( $user_id ), $email, $view ); }
 		$unsubscribe_link = $unsubscribe_url ? '<a href="' . esc_url( $unsubscribe_url ) . '">' . esc_html__( 'Unsubscribe', 'wc-product-view-reminder-lite' ) . '</a>' : '';
-		$subject_template = get_option( 'wc_pvr_email_subject', 'You viewed {product_name}' );
-		$message_template = 'cart' === $type ? get_option( 'wc_pvr_cart_email_message', '' ) : get_option( 'wc_pvr_email_message', '' );
+		$subject_template = get_option( 'wc_pvr_email_subject', __( 'You viewed {product_name}', 'wc-product-view-reminder-lite' ) );
+		if ( ! is_string( $subject_template ) || '' === trim( $subject_template ) ) {
+			$subject_template = __( 'You viewed {product_name}', 'wc-product-view-reminder-lite' );
+		}
+		$default_message = 'cart' === $type ? self::default_cart_message() : self::default_view_message();
+		$message_template = 'cart' === $type ? get_option( 'wc_pvr_cart_email_message', $default_message ) : get_option( 'wc_pvr_email_message', $default_message );
+		if ( ! is_string( $message_template ) || '' === trim( wp_strip_all_tags( $message_template ) ) ) {
+			$message_template = $default_message;
+		}
 		$email_heading = get_option( 'wc_pvr_email_heading', __( 'A product you viewed is waiting', 'wc-product-view-reminder-lite' ) );
 		$subject = str_replace( array( '{product_name}', '{store_name}' ), array( wp_strip_all_tags( $product_name ), wp_strip_all_tags( get_bloginfo( 'name' ) ) ), sanitize_text_field( $subject_template ) );
 		$product_link = '<a href="' . esc_url( $product_url ) . '">' . esc_html__( 'View product', 'wc-product-view-reminder-lite' ) . '</a>';
 		$button_text = sanitize_text_field( get_option( 'wc_pvr_email_button_text', __( 'View product', 'wc-product-view-reminder-lite' ) ) );
 		$cta_button = '<a href="' . esc_url( $product_url ) . '" style="display:inline-block;padding:10px 16px;text-decoration:none;background:#2271b1;color:#fff;border-radius:3px">' . esc_html( $button_text ) . '</a>';
 		$message = str_replace(
-			array( '{customer_name}', '{product_name}', '{product_link}', '{product_url}', '{product_price}', '{store_name}', '{email_heading}', '{unsubscribe_url}', '{cta_button}' ),
-			array( esc_html( $customer_name ), esc_html( $product_name ), $product_link, esc_url( $product_url ), esc_html( $price ), esc_html( get_bloginfo( 'name' ) ), esc_html( $email_heading ), $unsubscribe_link, $cta_button ),
+			array( '{customer_name}', '{product_name}', '{product_link}', '{product_url}', '{product_price}', '{product_image}', '{store_name}', '{email_heading}', '{unsubscribe_url}', '{cta_button}' ),
+			array( esc_html( $customer_name ), esc_html( $product_name ), $product_link, esc_url( $product_url ), esc_html( $price ), $product_image, esc_html( get_bloginfo( 'name' ) ), esc_html( $email_heading ), $unsubscribe_link, $cta_button ),
 			wp_kses_post( $message_template )
 		);
+		if ( false === strpos( $message, '<p' ) && false === strpos( $message, '<br' ) && function_exists( 'wpautop' ) ) {
+			$message = wpautop( $message );
+		}
 		if ( $unsubscribe_link && false === strpos( $message_template, '{unsubscribe_url}' ) ) { $message .= '<p>' . esc_html__( 'To stop future product reminders,', 'wc-product-view-reminder-lite' ) . ' ' . $unsubscribe_link . '.</p>'; }
-		return array( 'subject' => $subject, 'message' => $message );
+		return array( 'subject' => $subject, 'message' => $message, 'unsubscribe_url' => $unsubscribe_url );
 	}
 
 	public function send_local_test_email( $recipient ) {
@@ -362,12 +499,20 @@ class WC_PVR_Reminder {
 		return wp_mail( $recipient, '[Local test] ' . $template['subject'], $template['message'], $this->mail_headers() );
 	}
 
-	private function mail_headers() {
+	private function mail_headers( $unsubscribe_url = '' ) {
 		$headers = array( 'Content-Type: text/html; charset=UTF-8' );
 		$name = sanitize_text_field( get_option( 'wc_pvr_email_sender_name', get_bloginfo( 'name' ) ) );
 		$email = sanitize_email( get_option( 'wc_pvr_email_sender_email', get_option( 'admin_email' ) ) );
 		if ( $name && is_email( $email ) ) {
-			$headers[] = 'From: ' . $name . ' <' . $email . '>';
+			$safe_name = str_replace( array( "\r", "\n", '"' ), '', $name );
+			$headers[] = 'From: "' . $safe_name . '" <' . $email . '>';
+		}
+		if ( $unsubscribe_url ) {
+			$safe_unsubscribe = function_exists( 'esc_url_raw' ) ? esc_url_raw( $unsubscribe_url ) : esc_url( $unsubscribe_url );
+			if ( $safe_unsubscribe ) {
+				$headers[] = 'List-Unsubscribe: <' . $safe_unsubscribe . '>';
+				$headers[] = 'List-Unsubscribe-Post: List-Unsubscribe=One-Click';
+			}
 		}
 		return $headers;
 	}

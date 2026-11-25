@@ -81,9 +81,9 @@ class WC_PVR_Privacy {
 				'Product' => $product ? $product->get_name() : sprintf( __( 'Deleted product #%d', 'wc-product-view-reminder-lite' ), absint( $row->product_id ) ),
 				'Viewed at' => $row->view_time,
 				'Added to cart' => $row->added_to_cart ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
-				'Purchased flag' => $row->purchased ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
-				'Product reminder accepted' => $row->view_reminder_sent ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
-				'Cart reminder accepted' => $row->cart_reminder_sent ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
+				__( 'Bought this product', 'wc-product-view-reminder-lite' ) => $row->purchased ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
+				__( 'Product reminder sent', 'wc-product-view-reminder-lite' ) => $row->view_reminder_sent ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
+				__( 'Cart reminder sent', 'wc-product-view-reminder-lite' ) => $row->cart_reminder_sent ? __( 'Yes', 'wc-product-view-reminder-lite' ) : __( 'No', 'wc-product-view-reminder-lite' ),
 			) );
 		}
 
@@ -130,7 +130,7 @@ class WC_PVR_Privacy {
 				$more = $more || $purchase_count > $offset + count( $purchase_rows );
 				foreach ( (array) $purchase_rows as $row ) {
 					$product = wc_get_product( absint( $row->product_id ) );
-					$groups[] = $this->export_item( 'purchase-' . absint( $row->id ), __( 'Purchase lookup reference', 'wc-product-view-reminder-lite' ), array(
+					$groups[] = $this->export_item( 'purchase-' . absint( $row->id ), __( 'Order reference', 'wc-product-view-reminder-lite' ), array(
 						'WooCommerce order ID' => absint( $row->order_id ),
 						'Product' => $product ? $product->get_name() : sprintf( __( 'Deleted product #%d', 'wc-product-view-reminder-lite' ), absint( $row->product_id ) ),
 						'Variation ID' => absint( $row->variation_id ), 'Order status' => $row->order_status,
@@ -202,8 +202,8 @@ class WC_PVR_Privacy {
 			$remaining = $remaining || (bool) $wpdb->get_var( "SELECT id FROM {$consent} WHERE {$consent_remaining} LIMIT 1" );
 		}
 		$messages = array();
-		if ( $suppression_id ) { $messages[] = __( 'A minimal keyed opt-out suppression record was retained. It contains no raw email address and prevents this address from being re-enabled by another adapter.', 'wc-product-view-reminder-lite' ); }
-		$messages[] = __( 'RecoverFlow removed its matching view, reminder history, and purchase lookup references. WooCommerce orders were not changed.', 'wc-product-view-reminder-lite' );
+		if ( $suppression_id ) { $messages[] = __( 'We kept a minimal, unreadable record that this customer opted out, so they are not emailed again. It does not contain their email address.', 'wc-product-view-reminder-lite' ); }
+		$messages[] = __( 'RecoverFlow removed matching product views, reminder history, and order references. WooCommerce orders were not changed.', 'wc-product-view-reminder-lite' );
 		return array( 'items_removed' => $removed > 0, 'items_retained' => (bool) $suppression_id, 'messages' => $messages, 'done' => ! $remaining );
 	}
 
@@ -239,7 +239,7 @@ class WC_PVR_Privacy {
 			$deleted['consent_history'] = $this->delete_ids( $consent, $ids );
 		}
 		if ( WC_PVR_Consent::is_installed() ) {
-			$expired_tokens = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$consent} WHERE token_expires_at IS NOT NULL AND token_expires_at < %s ORDER BY token_expires_at ASC LIMIT %d", $now->format( 'Y-m-d H:i:s' ), self::CLEANUP_BATCH ) );
+			$expired_tokens = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$consent} WHERE token_expires_at IS NOT NULL AND token_expires_at < %s ORDER BY token_expires_at ASC LIMIT %d", gmdate( 'Y-m-d H:i:s' ), self::CLEANUP_BATCH ) );
 			if ( $expired_tokens ) {
 				$placeholders = implode( ',', array_fill( 0, count( $expired_tokens ), '%d' ) );
 				$deleted['tokens'] = (int) $wpdb->query( $wpdb->prepare( "UPDATE {$consent} SET unsubscribe_token_hash = NULL,token_expires_at = NULL,token_used_at = NULL WHERE id IN ({$placeholders})", array_map( 'absint', $expired_tokens ) ) );

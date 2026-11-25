@@ -51,6 +51,8 @@ class WC_PVR_Order_Store {
 
 			if ( in_array( $status, array( 'processing', 'completed' ), true ) && $order->is_paid() ) {
 				$this->mark_matching_views_purchased( $order, $product_id );
+			} elseif ( in_array( $status, array( 'refunded', 'cancelled', 'failed', 'trash' ), true ) ) {
+				$this->clear_matching_views_purchased( $order, $product_id );
 			}
 		}
 		if ( $sync_ok ) {
@@ -63,9 +65,7 @@ class WC_PVR_Order_Store {
 		return $sync_ok;
 	}
 
-	private function mark_matching_views_purchased( $order, $product_id ) {
-		global $wpdb;
-		$table = $wpdb->prefix . 'wc_pvr_views';
+	private function matching_view_product_ids( $order, $product_id ) {
 		$line_item_ids = array( absint( $product_id ) );
 		foreach ( $order->get_items( 'line_item' ) as $item ) {
 			if ( absint( $item->get_product_id() ) === absint( $product_id ) && $item->get_variation_id() ) {
@@ -73,14 +73,34 @@ class WC_PVR_Order_Store {
 			}
 		}
 		$product = wc_get_product( absint( $product_id ) );
-		$view_product_ids = array_unique( array_filter( array_merge( $line_item_ids, array( $product ? absint( $product->get_parent_id() ) : 0 ) ) ) );
-		foreach ( $view_product_ids as $view_product_id ) {
+		return array_unique( array_filter( array_merge( $line_item_ids, array( $product ? absint( $product->get_parent_id() ) : 0 ) ) ) );
+	}
+
+	private function mark_matching_views_purchased( $order, $product_id ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wc_pvr_views';
+		foreach ( $this->matching_view_product_ids( $order, $product_id ) as $view_product_id ) {
 			if ( $order->get_customer_id() ) {
 				$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET purchased = 1 WHERE product_id = %d AND user_id = %d", $view_product_id, absint( $order->get_customer_id() ) ) );
 			}
 			$email = sanitize_email( $order->get_billing_email() );
 			if ( is_email( $email ) ) {
 				$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET purchased = 1 WHERE product_id = %d AND email = %s", $view_product_id, $email ) );
+			}
+		}
+	}
+
+	/** Clears the purchased flag so refunded/cancelled orders can re-enter the reminder queue. */
+	private function clear_matching_views_purchased( $order, $product_id ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wc_pvr_views';
+		foreach ( $this->matching_view_product_ids( $order, $product_id ) as $view_product_id ) {
+			if ( $order->get_customer_id() ) {
+				$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET purchased = 0 WHERE product_id = %d AND user_id = %d AND purchased = 1", $view_product_id, absint( $order->get_customer_id() ) ) );
+			}
+			$email = sanitize_email( $order->get_billing_email() );
+			if ( is_email( $email ) ) {
+				$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET purchased = 0 WHERE product_id = %d AND email = %s AND purchased = 1", $view_product_id, $email ) );
 			}
 		}
 	}

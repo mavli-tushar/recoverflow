@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", function () {
             const confirmationInput = button.form.querySelector('input[name="confirmed"]');
             if (confirmationInput) { confirmationInput.value = "1"; }
             button.disabled = true;
-            button.textContent = "Sending...";
+            button.textContent = button.getAttribute("data-sending-label") || "Sending…";
         });
     });
 
@@ -17,27 +17,31 @@ document.addEventListener("DOMContentLoaded", function () {
         return;
     }
 
-    let remaining = parseInt(wc_pvr_data.remaining);
+    let remaining = parseInt(wc_pvr_data.remaining, 10);
+    if (isNaN(remaining)) {
+        remaining = 0;
+    }
 
     let countdownEl = document.getElementById("wc-pvr-countdown");
 
     if (!countdownEl) { return; }
 
+    const dueNow = (wc_pvr_data.i18n && wc_pvr_data.i18n.dueNow) || "A check is due now. Refresh to see the next one.";
+    const nextCheck = (wc_pvr_data.i18n && wc_pvr_data.i18n.nextCheck) || "Next check in: %m minutes %s seconds";
+
     function updateCountdown() {
 
         if (remaining <= 0) {
-
-            countdownEl.innerHTML =
-                "Cron should run now (refresh page to see next schedule)";
-
+            countdownEl.textContent = dueNow;
             return;
         }
 
         let minutes = Math.floor(remaining / 60);
         let seconds = remaining % 60;
 
-        countdownEl.innerHTML =
-            "Cron will run in: " + minutes + " minutes " + seconds + " seconds";
+        countdownEl.textContent = nextCheck
+            .replace("%m", String(minutes))
+            .replace("%s", String(seconds));
 
         remaining--;
     }
@@ -45,32 +49,5 @@ document.addEventListener("DOMContentLoaded", function () {
     updateCountdown();
 
     setInterval(updateCountdown, 1000);
-
-});
-
-
-jQuery(function ($) {
-
-    function toggleCartMessage() {
-
-        if ($('input[name="wc_pvr_cart_reminder"]').is(':checked')) {
-
-            $('#wc-pvr-cart-message-row').show();
-
-        } else {
-
-            $('#wc-pvr-cart-message-row').hide();
-
-        }
-
-    }
-
-    toggleCartMessage();
-
-    $('input[name="wc_pvr_cart_reminder"]').on('change', function () {
-
-        toggleCartMessage();
-
-    });
 
 });

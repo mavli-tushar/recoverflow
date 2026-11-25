@@ -25,15 +25,26 @@ function is_wp_error( $value ) { return $value instanceof WP_Error; }
 function wp_timezone() { return new DateTimeZone( 'UTC' ); }
 function current_datetime() { return new DateTimeImmutable( 'now', wp_timezone() ); }
 function current_time( $type = 'mysql' ) { return current_datetime()->format( 'Y-m-d H:i:s' ); }
-function wp_date( $format, $timestamp = null ) { return gmdate( $format, null === $timestamp ? current_datetime()->getTimestamp() : $timestamp ); }
+function wp_date( $format, $timestamp = null ) {
+	if ( 'G' === $format && array_key_exists( 'synthetic_hour', $GLOBALS ) ) {
+		return (string) absint( $GLOBALS['synthetic_hour'] );
+	}
+	return gmdate( $format, null === $timestamp ? current_datetime()->getTimestamp() : $timestamp );
+}
 function get_option( $key, $default = false ) {
 	if ( isset( $GLOBALS['synthetic_options'] ) && array_key_exists( $key, $GLOBALS['synthetic_options'] ) ) { return $GLOBALS['synthetic_options'][ $key ]; }
 	$options = array(
 		'wc_pvr_orders_backfill_complete' => 1,
 		'wc_pvr_reminder_delay' => 24,
 		'wc_pvr_cart_reminder' => 0,
+		'wc_pvr_frequency_days' => 7,
+		'wc_pvr_quiet_hours_enabled' => 0,
+		'wc_pvr_quiet_hours_start' => 9,
+		'wc_pvr_quiet_hours_end' => 20,
+		'wc_pvr_exclude_product_ids' => '',
+		'wc_pvr_exclude_category_ids' => '',
 		'wc_pvr_email_subject' => 'You viewed {product_name}',
-		'wc_pvr_email_message' => '<p>Hello {customer_name}: {product_name} {product_link} {cta_button}</p>',
+		'wc_pvr_email_message' => '<p>Hello {customer_name}: {product_name} {product_image} {product_link} {cta_button}</p>',
 		'wc_pvr_email_hash_key' => 'synthetic-test-secret',
 		'wc_pvr_email_sender_name' => 'Synthetic Shop',
 		'wc_pvr_email_sender_email' => 'shop@example.test',
@@ -41,13 +52,28 @@ function get_option( $key, $default = false ) {
 	);
 	return array_key_exists( $key, $options ) ? $options[ $key ] : $default;
 }
+function update_option( $key, $value, $autoload = null ) {
+	$GLOBALS['synthetic_options'][ $key ] = $value;
+	return true;
+}
+function set_transient( $key, $value, $expiration = 0 ) { $GLOBALS['synthetic_transients'][ $key ] = $value; return true; }
+function get_transient( $key ) { return isset( $GLOBALS['synthetic_transients'][ $key ] ) ? $GLOBALS['synthetic_transients'][ $key ] : false; }
+function wp_get_attachment_image_url( $id, $size = '' ) { return $id ? 'https://example.test/image/' . absint( $id ) . '.jpg' : false; }
+function wc_placeholder_img_src( $size = '' ) { return 'https://example.test/placeholder.jpg'; }
+function wp_get_post_terms( $post_id, $taxonomy, $args = array() ) {
+	$terms = isset( $GLOBALS['synthetic_product_cats'][ absint( $post_id ) ] ) ? $GLOBALS['synthetic_product_cats'][ absint( $post_id ) ] : array();
+	return ! empty( $args['fields'] ) && 'ids' === $args['fields'] ? $terms : $terms;
+}
 function get_post_status() { return 'publish'; }
 function get_userdata() { return false; }
 function get_bloginfo( $key ) { return 'name' === $key ? 'Synthetic Shop' : ''; }
 function wp_strip_all_tags( $value ) { return strip_tags( (string) $value ); }
 function wp_kses_post( $value ) { return strip_tags( (string) $value, '<p><br><strong><em><a>' ); }
 function esc_html( $value ) { return htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' ); }
+function esc_attr( $value ) { return htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' ); }
 function esc_url( $value ) { return filter_var( (string) $value, FILTER_SANITIZE_URL ); }
+function esc_url_raw( $value ) { return filter_var( (string) $value, FILTER_SANITIZE_URL ); }
+function wpautop( $value ) { return '<p>' . nl2br( (string) $value ) . '</p>'; }
 function wc_price( $price ) { return '$' . number_format( (float) $price, 2 ); }
 function wp_get_environment_type() { return 'local'; }
 function wp_mail( $to, $subject, $message, $headers = array() ) {
@@ -76,11 +102,13 @@ class Synthetic_Product {
 	public $id;
 	public $parent;
 	public $kind;
-	public function __construct( $id, $kind = 'simple', $parent = 0 ) { $this->id = $id; $this->kind = $kind; $this->parent = $parent; }
+	public $image_id;
+	public function __construct( $id, $kind = 'simple', $parent = 0, $image_id = 501 ) { $this->id = $id; $this->kind = $kind; $this->parent = $parent; $this->image_id = $image_id; }
 	public function get_id() { return $this->id; }
 	public function get_name() { return 'Synthetic <Product>'; }
 	public function get_permalink() { return 'https://example.test/product/' . $this->id; }
 	public function get_price() { return '12.50'; }
+	public function get_image_id() { return $this->image_id; }
 	public function is_type( $type ) { return $this->kind === $type; }
 	public function get_parent_id() { return $this->parent; }
 }
@@ -141,7 +169,16 @@ class Synthetic_DB {
 				foreach ( $this->history as $row ) { if ( $row['email_hash'] === $hash && 'pending' === $row['result'] && $row['attempted_at'] >= $cutoff ) { return $row['id'] ?? 1; } }
 				return null;
 			}
-			foreach ( $this->history as $row ) { if ( $row['email_hash'] === $hash && 'accepted' === $row['result'] ) { return $row['id'] ?? 1; } }
+			preg_match( "/product_id = [\'\"]?(\d+)/", $query, $product_match );
+			$product_id = isset( $product_match[1] ) ? (int) $product_match[1] : 0;
+			preg_match( "/attempted_at >= '([^']+)'/", $query, $cutoff_match );
+			$cutoff = isset( $cutoff_match[1] ) ? $cutoff_match[1] : '';
+			foreach ( $this->history as $row ) {
+				if ( $row['email_hash'] !== $hash || 'accepted' !== $row['result'] ) { continue; }
+				if ( $product_id && (int) ( $row['product_id'] ?? 0 ) !== $product_id ) { continue; }
+				if ( $cutoff && ( $row['attempted_at'] ?? '' ) < $cutoff ) { continue; }
+				return $row['id'] ?? 1;
+			}
 			return null;
 		}
 		return '1';
@@ -194,6 +231,8 @@ class Synthetic_DB {
 }
 
 $GLOBALS['synthetic_options'] = array();
+$GLOBALS['synthetic_transients'] = array();
+$GLOBALS['synthetic_product_cats'] = array();
 $GLOBALS['synthetic_external_eligible'] = false;
 $GLOBALS['synthetic_force_optout'] = false;
 $GLOBALS['synthetic_force_optout_false'] = false;
@@ -260,12 +299,50 @@ $first = $service->send_manual_reminder( 7, 1 );
 check( ! is_wp_error( $first ) && ! empty( $first['accepted'] ), 'successful wp_mail() is recorded as accepted' );
 check( 'accepted' === end( $wpdb->history )['result'], 'accepted send appears in attempt history' );
 $rate_limited = view_fixture( 70, 10, 'consented@example.test', 42 );
-check( 'customer_frequency_limit' === $service->can_send( $rate_limited, true )->get_error_code(), 'weekly frequency limit applies across different product views for the same customer' );
+check( 'customer_frequency_limit' === $service->can_send( $rate_limited, true )->get_error_code(), 'weekly frequency limit blocks another reminder for the same product' );
+$other_product = view_fixture( 71, 11, 'consented@example.test', 42 );
+check( true === $service->can_send( $other_product, true ), 'a different product can still receive a reminder within seven days' );
 $mail_count = $GLOBALS['synthetic_mail_count'];
 $duplicate = $service->send_manual_reminder( 7, 1 );
 check( is_wp_error( $duplicate ) && 'already_sent' === $duplicate->get_error_code(), 'duplicate accepted reminder is blocked' );
 check( $GLOBALS['synthetic_mail_count'] === $mail_count, 'duplicate attempt does not call wp_mail() again' );
 check( false === strpos( $GLOBALS['synthetic_last_mail']['message'], '<script' ), 'email template strips unsafe dynamic/template markup' );
+check( false !== strpos( $GLOBALS['synthetic_last_mail']['message'], 'https://example.test/image/501.jpg' ), 'product image placeholder is rendered in the email body' );
+
+foreach ( $wpdb->history as &$history_row ) {
+	if ( (int) ( $history_row['product_id'] ?? 0 ) === 10 && 'accepted' === ( $history_row['result'] ?? '' ) && WC_PVR_Consent::email_hash( 'consented@example.test' ) === ( $history_row['email_hash'] ?? '' ) ) {
+		$history_row['attempted_at'] = current_datetime()->modify( '-4 days' )->format( 'Y-m-d H:i:s' );
+	}
+}
+unset( $history_row );
+$GLOBALS['synthetic_options']['wc_pvr_frequency_days'] = 3;
+$cooled_down = view_fixture( 72, 10, 'consented@example.test', 42 );
+check( true === $service->can_send( $cooled_down, true ), 'configurable 3-day cooldown allows a resend after the window' );
+$GLOBALS['synthetic_options']['wc_pvr_frequency_days'] = 14;
+check( 'customer_frequency_limit' === $service->can_send( $cooled_down, true )->get_error_code(), 'longer cooldown still blocks the same product' );
+$GLOBALS['synthetic_options']['wc_pvr_frequency_days'] = 7;
+
+$GLOBALS['synthetic_options']['wc_pvr_exclude_product_ids'] = '10';
+check( 'product_excluded' === $service->can_send( view_fixture( 73, 10, 'consented@example.test', 42 ), true )->get_error_code(), 'excluded product IDs block reminders' );
+$GLOBALS['synthetic_options']['wc_pvr_exclude_product_ids'] = '';
+$GLOBALS['synthetic_options']['wc_pvr_exclude_category_ids'] = '22';
+$GLOBALS['synthetic_product_cats'][11] = array( 22 );
+check( 'product_excluded' === $service->can_send( view_fixture( 74, 11, 'consented@example.test', 42 ), true )->get_error_code(), 'excluded categories block reminders' );
+$GLOBALS['synthetic_options']['wc_pvr_exclude_category_ids'] = '';
+$GLOBALS['synthetic_product_cats'] = array();
+
+$GLOBALS['synthetic_options']['wc_pvr_quiet_hours_enabled'] = 1;
+$GLOBALS['synthetic_options']['wc_pvr_quiet_hours_start'] = 9;
+$GLOBALS['synthetic_options']['wc_pvr_quiet_hours_end'] = 20;
+$GLOBALS['synthetic_hour'] = 22;
+check( false === WC_PVR_Reminder::is_within_send_window(), 'quiet hours close the automatic send window at night' );
+$mail_before_quiet = $GLOBALS['synthetic_mail_count'];
+$service->send_pvr_reminders();
+check( $GLOBALS['synthetic_mail_count'] === $mail_before_quiet, 'cron skips automatic sends outside quiet hours' );
+$GLOBALS['synthetic_hour'] = 10;
+check( true === WC_PVR_Reminder::is_within_send_window(), 'quiet hours reopen during the configured window' );
+$GLOBALS['synthetic_options']['wc_pvr_quiet_hours_enabled'] = 0;
+unset( $GLOBALS['synthetic_hour'] );
 
 $wpdb->views[ 8 ] = view_fixture( 8, 10, 'failed@example.test', 0 );
 $GLOBALS['synthetic_mail_result'] = false;
@@ -331,4 +408,4 @@ check( is_wp_error( $unrecorded ) && 'history_write_failed' === $unrecorded->get
 check( $GLOBALS['synthetic_mail_count'] === $mail_count, 'history insert failure prevents unlogged mail delivery' );
 $wpdb->fail_history_insert = false;
 
-echo "Reminder service smoke tests passed (eligibility, sends, retries, per-customer pending guard, duplicate guard, cart option, IDs, consent, logged-in/guest purchases, variation matching).\n";
+echo "Reminder service smoke tests passed (eligibility, sends, retries, per-customer pending guard, duplicate guard, cart option, IDs, consent, logged-in/guest purchases, variation matching, quiet hours, cooldown, product image, exclusions).\n";

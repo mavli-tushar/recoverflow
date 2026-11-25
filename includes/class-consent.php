@@ -207,8 +207,17 @@ class WC_PVR_Consent {
 		return self::is_installed() && (bool) get_option( 'wc_pvr_consent_enabled', 0 ) && (bool) get_option( 'wc_pvr_consent_' . $context, 0 );
 	}
 
+	/** Default checkbox / consent field text shown to customers. */
+	public static function default_wording() {
+		return __( 'I agree to receive product reminders and promotional emails from this store. I can unsubscribe at any time.', 'wc-product-view-reminder-lite' );
+	}
+
 	private function wording() {
-		return sanitize_text_field( get_option( 'wc_pvr_consent_wording', __( 'I agree to receive product reminders and promotional emails from this store. I can unsubscribe at any time.', 'wc-product-view-reminder-lite' ) ) );
+		$wording = get_option( 'wc_pvr_consent_wording', '' );
+		if ( ! is_string( $wording ) || '' === trim( $wording ) ) {
+			$wording = self::default_wording();
+		}
+		return sanitize_text_field( $wording );
 	}
 
 	private function wording_version() {
@@ -297,7 +306,7 @@ class WC_PVR_Consent {
 		} elseif ( 'opted_out' === $status ) {
 			esc_html_e( 'Current status: opted out of product reminder emails.', 'wc-product-view-reminder-lite' );
 		} else {
-			esc_html_e( 'Current status: no RecoverFlow consent choice is recorded.', 'wc-product-view-reminder-lite' );
+			esc_html_e( 'Current status: you have not chosen yet.', 'wc-product-view-reminder-lite' );
 		}
 		?></p>
 		<form method="post">
@@ -328,7 +337,44 @@ class WC_PVR_Consent {
 		if ( ! $hash ) { return ''; }
 		$token = rtrim( strtr( base64_encode( random_bytes( 32 ) ), '+/', '-_' ), '=' );
 		$table = self::table_name();
-		$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET unsubscribe_token_hash = %s, token_expires_at = %s, token_used_at = NULL WHERE id = (SELECT id FROM (SELECT id FROM {$table} WHERE email_hash = %s AND status = 'opted_in' ORDER BY id DESC LIMIT 1) AS latest)", hash_hmac( 'sha256', $token, get_option( 'wc_pvr_email_hash_key' ) ), gmdate( 'Y-m-d H:i:s', time() + ( 30 * DAY_IN_SECONDS ) ), $hash ) );
+		$token_hash = hash_hmac( 'sha256', $token, get_option( 'wc_pvr_email_hash_key' ) );
+		$expires_at = gmdate( 'Y-m-d H:i:s', time() + ( 30 * DAY_IN_SECONDS ) );
+		/* Prefer an opted-in row, then any latest row, so adapter-eligible customers still get a working link. */
+		$updated = $wpdb->query( $wpdb->prepare(
+			"UPDATE {$table} SET unsubscribe_token_hash = %s, token_expires_at = %s, token_used_at = NULL WHERE id = (SELECT id FROM (SELECT id FROM {$table} WHERE email_hash = %s AND status = 'opted_in' ORDER BY id DESC LIMIT 1) AS latest)",
+			$token_hash,
+			$expires_at,
+			$hash
+		) );
+		if ( ! $updated ) {
+			$updated = $wpdb->query( $wpdb->prepare(
+				"UPDATE {$table} SET unsubscribe_token_hash = %s, token_expires_at = %s, token_used_at = NULL WHERE id = (SELECT id FROM (SELECT id FROM {$table} WHERE email_hash = %s ORDER BY id DESC LIMIT 1) AS latest)",
+				$token_hash,
+				$expires_at,
+				$hash
+			) );
+		}
+		if ( ! $updated ) {
+			$now = current_time( 'mysql' );
+			$wpdb->insert(
+				$table,
+				array(
+					'user_id' => null,
+					'email_hash' => $hash,
+					'status' => 'opted_in',
+					'source' => 'reminder_delivery',
+					'channel' => 'email',
+					'wording_version' => self::WORDING_VERSION,
+					'consented_at' => $now,
+					'revoked_at' => null,
+					'created_at' => $now,
+					'unsubscribe_token_hash' => $token_hash,
+					'token_expires_at' => $expires_at,
+					'token_used_at' => null,
+				),
+				array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+			);
+		}
 		return add_query_arg( array( 'action' => 'wc_pvr_unsubscribe', 'token' => $token ), admin_url( 'admin-post.php' ) );
 	}
 
@@ -338,9 +384,21 @@ class WC_PVR_Consent {
 		if ( ! headers_sent() ) { header( 'Referrer-Policy: no-referrer' ); }
 		$token = isset( $_REQUEST['token'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['token'] ) ) : '';
 		if ( ! preg_match( '/^[A-Za-z0-9_-]{40,50}$/', $token ) ) { wp_die( esc_html__( 'This unsubscribe link is invalid or expired.', 'wc-product-view-reminder-lite' ) ); }
-		if ( 'POST' !== $_SERVER['REQUEST_METHOD'] ) {
+		$request_method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) ) : 'GET';
+		if ( 'POST' !== $request_method ) {
 			$action_url = esc_url( admin_url( 'admin-post.php' ) );
-			printf( '<div class="wrap"><h1>%s</h1><p>%s</p><form method="post" action="%s"><input type="hidden" name="action" value="wc_pvr_unsubscribe"><input type="hidden" name="token" value="%s"><button class="button button-primary">%s</button></form></div>', esc_html__( 'Unsubscribe from product reminders', 'wc-product-view-reminder-lite' ), esc_html__( 'Confirm to stop future product reminder emails.', 'wc-product-view-reminder-lite' ), $action_url, esc_attr( $token ), esc_html__( 'Unsubscribe', 'wc-product-view-reminder-lite' ) );
+			$store_name = esc_html( get_bloginfo( 'name' ) );
+			printf(
+				'<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%1$s</title></head><body style="font-family:sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;"><h1>%1$s</h1><p>%2$s</p><form method="post" action="%3$s"><input type="hidden" name="action" value="wc_pvr_unsubscribe"><input type="hidden" name="token" value="%4$s"><button type="submit" style="padding:0.6rem 1rem;">%5$s</button></form><p><a href="%6$s">%7$s</a></p></body></html>',
+				esc_html__( 'Unsubscribe from product reminders', 'wc-product-view-reminder-lite' ),
+				esc_html__( 'Confirm to stop future product reminder emails.', 'wc-product-view-reminder-lite' ),
+				$action_url,
+				esc_attr( $token ),
+				esc_html__( 'Unsubscribe', 'wc-product-view-reminder-lite' ),
+				esc_url( home_url( '/' ) ),
+				/* translators: %s: store name */
+				esc_html( sprintf( __( 'Return to %s', 'wc-product-view-reminder-lite' ), $store_name ) )
+			);
 			exit;
 		}
 		global $wpdb;
@@ -349,7 +407,7 @@ class WC_PVR_Consent {
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE unsubscribe_token_hash = %s AND token_used_at IS NULL AND token_expires_at >= %s ORDER BY id DESC LIMIT 1", $token_hash, gmdate( 'Y-m-d H:i:s' ) ) );
 		if ( ! $row ) { wp_die( esc_html__( 'This unsubscribe link is invalid or expired.', 'wc-product-view-reminder-lite' ) ); }
 		$now = current_time( 'mysql' );
-		$wpdb->insert( $table, array(
+		$inserted = $wpdb->insert( $table, array(
 			'user_id' => $row->user_id ? absint( $row->user_id ) : null,
 			'email_hash' => $row->email_hash,
 			'status' => 'opted_out',
@@ -360,6 +418,9 @@ class WC_PVR_Consent {
 			'revoked_at' => $now,
 			'created_at' => $now,
 		), array( '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' ) );
+		if ( false === $inserted ) {
+			wp_die( esc_html__( 'We could not save your unsubscribe request. Please contact the store.', 'wc-product-view-reminder-lite' ) );
+		}
 		$wpdb->update( $table, array( 'token_used_at' => $now ), array( 'id' => absint( $row->id ) ), array( '%s' ), array( '%d' ) );
 		wp_die( esc_html__( 'You have been unsubscribed from product reminder emails.', 'wc-product-view-reminder-lite' ) );
 	}

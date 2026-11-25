@@ -11,7 +11,6 @@ class WC_PVR_Tracker {
         add_action( 'wp_enqueue_scripts', array( $this, 'scripts' ) );
 
         add_action( 'wp_ajax_wc_pvr_track', array( $this, 'track' ) );
-        add_action( 'wp_ajax_nopriv_wc_pvr_track', array( $this, 'track' ) );
 
         add_action( 'woocommerce_add_to_cart', array( $this, 'mark_cart' ), 10, 2 );
         add_action( 'woocommerce_ajax_added_to_cart', array( $this, 'mark_cart_ajax' ) );
@@ -25,7 +24,7 @@ class WC_PVR_Tracker {
 
     public function scripts() {
 
-        if ( ! is_product()) {
+        if ( ! is_product() || ! is_user_logged_in() ) {
             return;
         }
 
@@ -57,6 +56,9 @@ class WC_PVR_Tracker {
         if ( ! $product_id ) {
             wp_die();
         }
+        if ( class_exists( 'WC_PVR_Reminder' ) && WC_PVR_Reminder::is_product_excluded( $product_id ) ) {
+            wp_die();
+        }
 
         $user = wp_get_current_user();
 
@@ -71,16 +73,21 @@ class WC_PVR_Tracker {
         /**
          * Prevent duplicate entry for same user + product for today
          */
+        $day_start = current_time( 'Y-m-d' ) . ' 00:00:00';
+        $day_end   = current_time( 'Y-m-d' ) . ' 23:59:59';
         $exists = $wpdb->get_var(
             $wpdb->prepare(
                 "SELECT id
                 FROM $table
                 WHERE user_id = %d
                 AND product_id = %d
-                AND DATE(view_time) = CURDATE()
+                AND view_time >= %s
+                AND view_time <= %s
                 LIMIT 1",
                 $user->ID,
-                $product_id
+                $product_id,
+                $day_start,
+                $day_end
             )
         );
 
@@ -100,14 +107,7 @@ class WC_PVR_Tracker {
                 'view_reminder_sent' => 0,
                 'cart_reminder_sent' => 0,
             ),
-            array(
-                '%d',
-                '%d',
-                '%s',
-                '%s',
-                '%d',
-                '%d'
-            )
+            array( '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%d' )
         );
 
         wp_die();
@@ -127,6 +127,7 @@ class WC_PVR_Tracker {
 
     $product_id = $this->valid_product_id( wp_unslash( $_POST['product_id'] ) );
     if ( ! $product_id ) { return; }
+    if ( class_exists( 'WC_PVR_Reminder' ) && WC_PVR_Reminder::is_product_excluded( $product_id ) ) { return; }
 
     $user = wp_get_current_user();
 
@@ -187,6 +188,7 @@ class WC_PVR_Tracker {
 
     $product_id = $this->valid_product_id( $product_id );
     if ( ! $product_id ) { return; }
+    if ( class_exists( 'WC_PVR_Reminder' ) && WC_PVR_Reminder::is_product_excluded( $product_id ) ) { return; }
 
     $user = wp_get_current_user();
 
